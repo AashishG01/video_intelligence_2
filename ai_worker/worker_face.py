@@ -10,9 +10,15 @@ from pymilvus import MilvusClient
 from insightface.app import FaceAnalysis
 
 # ─────────────────────────────────────────
+# CONFIGURATION — tune these values
+# ─────────────────────────────────────────
+CONFIDENCE_GATE   = 0.60   # min face detection confidence
+MATCH_THRESHOLD   = 0.50   # milvus cosine similarity (higher = more similar)
+DEDUP_WINDOW_SEC  = 60     # global dedup window per person (seconds)
+
+# ─────────────────────────────────────────
 # 1. Connections
 # ─────────────────────────────────────────
-
 print("⏳ Connecting to Redis...")
 r = redis.Redis(host='localhost', port=6379, db=0)
 
@@ -32,21 +38,18 @@ milvus_client = MilvusClient(uri="http://localhost:19530")
 COLLECTION_NAME = "face_embeddings"
 
 # ─────────────────────────────────────────
-# 2. Ensure Milvus Collection Exists & Is Loaded
+# 2. Ensure Milvus Collection Exists & Loaded
 # ─────────────────────────────────────────
-
 def ensure_collection_loaded():
-    """Create collection if missing, then load it into memory."""
     if not milvus_client.has_collection(COLLECTION_NAME):
-        print(f"⚠️  Collection '{COLLECTION_NAME}' not found. Creating it...")
+        print(f"⚠️  Collection '{COLLECTION_NAME}' not found. Creating...")
         milvus_client.create_collection(
             collection_name=COLLECTION_NAME,
-            dimension=512,          # AntelopeV2 = 512-dim embeddings
+            dimension=512,
             metric_type="COSINE",
             auto_id=True,
         )
         print(f"✅ Collection '{COLLECTION_NAME}' created.")
-
     milvus_client.load_collection(COLLECTION_NAME)
     print(f"✅ Collection '{COLLECTION_NAME}' loaded into memory.")
 
@@ -55,130 +58,159 @@ ensure_collection_loaded()
 # ─────────────────────────────────────────
 # 3. Setup Save Directory
 # ─────────────────────────────────────────
-
-# Root folder — per-person subfolders will be created inside this
 SAVE_FOLDER = "../backend_api/captured_faces"
 os.makedirs(SAVE_FOLDER, exist_ok=True)
 
 # ─────────────────────────────────────────
-# 4. Helper — Get or Create Person Folder
+# 4. Helper — Per-Person Subfolder
 # ─────────────────────────────────────────
-
 def get_person_folder(person_id: str) -> str:
     """
-    Returns the folder path for a given person_id.
-    Creates the folder if it doesn't exist yet.
+    Returns path to this person's subfolder, creating it if needed.
 
     Structure:
         captured_faces/
             P_1743047823000/
                 cam1_1743047823.jpg
                 cam2_1743047900.jpg
-            P_1743047999000/
-                cam1_1743047999.jpg
     """
     folder = os.path.join(SAVE_FOLDER, person_id)
     os.makedirs(folder, exist_ok=True)
     return folder
 
 # ─────────────────────────────────────────
-# 5. Initialize Face AI Model
+# 5. Initialize AI Model
 # ─────────────────────────────────────────
-
 print("⏳ Loading AntelopeV2 AI model...")
 face_app = FaceAnalysis(
     name='antelopev2',
     providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
 )
-face_app.prepare(ctx_id=0, det_thresh=0.45, det_size=(320, 320))
-print("✅ Face Worker Online. Awaiting human crops...")
+# KEY FIX: det_size=640 on full frame — matches your POC accuracy
+face_app.prepare(ctx_id=0, det_thresh=0.45, det_size=(640, 640))
+print("✅ Face Worker Online. Awaiting frames...")
 
 # ─────────────────────────────────────────
 # 6. Main Worker Loop
 # ─────────────────────────────────────────
-
 while True:
     try:
-        # ── Pull job from Redis queue (blocks until message arrives) ──
-        queue_name, msg = r.brpop("person_crops_queue", timeout=0)
-        payload = json.loads(msg.decode('utf-8'))
-
+        # Pull from face_ready_queue (full frames, YOLO pre-filtered)
+        queue_name, msg = r.brpop("face_ready_queue", timeout=0)
+        payload   = json.loads(msg.decode('utf-8'))
         cam_id    = payload['camera_id']
         timestamp = payload['timestamp']
 
-        # ── Decode base64 image ──
-        img_bytes = base64.b64decode(payload['crop_data'])
+        # Decode full frame
+        img_bytes = base64.b64decode(payload['frame_data'])
         np_arr    = np.frombuffer(img_bytes, np.uint8)
-        crop_img  = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        frame     = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-        if crop_img is None:
-            print(f"[{cam_id}] ⚠️  Failed to decode image. Skipping.")
+        if frame is None:
+            print(f"[{cam_id}] ⚠️  Failed to decode frame. Skipping.")
             continue
 
-        # ── Run face detection & embedding ──
-        faces = face_app.get(crop_img)
+        # Run InsightFace on full frame — finds ALL faces in the scene
+        faces = face_app.get(frame)
 
         if len(faces) == 0:
-            # No face detected in the crop — skip silently
             continue
 
-        face      = faces[0]
-        embedding = face.embedding.tolist()
+        for face in faces:
 
-        # ── Search Milvus for existing match ──
-        search_res = milvus_client.search(
-            collection_name=COLLECTION_NAME,
-            data=[embedding],
-            limit=1,
-            output_fields=["person_id"],
-            search_params={"metric_type": "COSINE", "params": {"nprobe": 10}}
-        )
+            # ── CONFIDENCE GATE ──
+            if face.det_score < CONFIDENCE_GATE:
+                continue
 
-        # ── Threshold check (cosine similarity > 0.60 = known person) ──
-        is_match  = False
-        person_id = None
+            embedding = face.embedding.tolist()
 
-        if search_res and len(search_res[0]) > 0:
-            top_match = search_res[0][0]
-            if top_match['distance'] > 0.60:
-                person_id = top_match['entity']['person_id']
-                is_match  = True
+            # ── Crop just this face for saving ──
+            x1, y1, x2, y2 = face.bbox.astype(int)
+            y1, y2 = max(0, y1), min(frame.shape[0], y2)
+            x1, x2 = max(0, x1), min(frame.shape[1], x2)
+            face_crop = frame[y1:y2, x1:x2]
 
-        if not is_match:
-            person_id = f"P_{int(time.time() * 1000)}"
+            if face_crop.size == 0:
+                continue
 
-        # ── Camera-specific dedup: skip if seen in last 30 seconds ──
-        cache_key = f"seen_{cam_id}_{person_id}"
-        if r.exists(cache_key):
-            continue
+            # ── Milvus similarity search ──
+            is_match  = False
+            person_id = None
 
-        # ── Get (or create) this person's folder ──
-        person_folder = get_person_folder(person_id)
+            try:
+                search_res = milvus_client.search(
+                    collection_name=COLLECTION_NAME,
+                    data=[embedding],
+                    limit=1,
+                    output_fields=["person_id"],
+                    search_params={"metric_type": "COSINE", "params": {"nprobe": 10}}
+                )
 
-        # ── Save face image into person's folder ──
-        filename = f"{cam_id}_{int(timestamp)}.jpg"
-        filepath = os.path.join(person_folder, filename)
-        cv2.imwrite(filepath, crop_img)
+                if search_res and len(search_res[0]) > 0:
+                    top   = search_res[0][0]
+                    dist  = top['distance']
+                    print(f"🔍 [{cam_id}] Distance: {dist:.4f} (threshold: {MATCH_THRESHOLD})")
 
-        # ── Insert embedding into Milvus ──
-        milvus_client.insert(
-            collection_name=COLLECTION_NAME,
-            data=[{"person_id": person_id, "embedding": embedding}]
-        )
+                    if dist > MATCH_THRESHOLD:
+                        person_id = top['entity']['person_id']
+                        is_match  = True
+                        print(f"✅ MATCH: {person_id}")
+                    else:
+                        print(f"❌ NO MATCH: {dist:.4f} < {MATCH_THRESHOLD}. New person.")
 
-        # ── Insert sighting record into PostgreSQL ──
-        # Store relative path so backend can serve it easily
-        relative_path = f"/captured_faces/{person_id}/{filename}"
-        pg_cursor.execute(
-            "INSERT INTO sightings (person_id, camera_id, timestamp, image_path) VALUES (%s, %s, %s, %s)",
-            (person_id, cam_id, timestamp, relative_path)
-        )
+            except Exception as search_err:
+                print(f"⚠️  Milvus search error: {search_err}")
+                continue
 
-        # ── Mark this person as recently seen on this camera ──
-        r.setex(cache_key, 30, "1")
+            if not person_id:
+                person_id = f"P_{int(time.time() * 1000)}"
 
-        status = "MATCH ✅" if is_match else "NEW 🆕"
-        print(f"[{cam_id}] 💾 {status}: {person_id} → saved to {person_folder}")
+            # ── GLOBAL dedup — not per-camera ──
+            cache_key = f"seen_global_{person_id}"
+            if r.exists(cache_key):
+                continue
+
+            # ── Get or create person's subfolder ──
+            person_folder = get_person_folder(person_id)
+
+            # ── Save face crop into person's folder ──
+            filename  = f"{cam_id}_{int(timestamp)}.jpg"
+            filepath  = os.path.join(person_folder, filename)
+            cv2.imwrite(filepath, face_crop)
+
+            # ── Insert into Milvus + flush immediately ──
+            milvus_client.insert(
+                collection_name=COLLECTION_NAME,
+                data=[{"person_id": person_id, "embedding": embedding}]
+            )
+            milvus_client.flush(collection_name=COLLECTION_NAME)
+
+            # ── Insert sighting into PostgreSQL ──
+            relative_path = f"/captured_faces/{person_id}/{filename}"
+            pg_cursor.execute(
+                "INSERT INTO sightings (person_id, camera_id, timestamp, image_path) "
+                "VALUES (%s, %s, %s, %s)",
+                (person_id, cam_id, timestamp, relative_path)
+            )
+
+            # ── Set global dedup cache ──
+            r.setex(cache_key, DEDUP_WINDOW_SEC, "1")
+
+            # ── Publish real-time alert to dashboard ──
+            r_pub = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+            r_pub.publish("live_face_alerts", json.dumps({
+                "person_id":  person_id,
+                "camera_id":  cam_id,
+                "timestamp":  timestamp,
+                "image_path": relative_path,
+                "confidence": round(float(face.det_score), 3),
+                "status":     "MATCH" if is_match else "NEW"
+            }))
+            r_pub.close()
+
+            status = "MATCH ✅" if is_match else "NEW 🆕"
+            print(f"[{cam_id}] 💾 {status}: {person_id} "
+                  f"(conf: {face.det_score:.2f}) → {person_folder}")
 
     except KeyboardInterrupt:
         print("\n🛑 Worker stopped by user.")
@@ -188,19 +220,18 @@ while True:
         error_msg = str(e)
         print(f"⚠️  Worker Error: {error_msg}")
 
-        # ── Auto-recover if Milvus collection got unloaded mid-run ──
+        # Auto-recover: Milvus collection unloaded
         if "collection not loaded" in error_msg:
-            print("🔄 Milvus collection unloaded. Attempting reload...")
+            print("🔄 Milvus collection unloaded. Reloading...")
             try:
                 milvus_client.load_collection(COLLECTION_NAME)
-                print("✅ Collection reloaded successfully. Resuming...")
+                print("✅ Collection reloaded. Resuming...")
             except Exception as reload_err:
-                print(f"❌ Failed to reload collection: {reload_err}")
-                print("⏳ Waiting 5 seconds before retrying...")
+                print(f"❌ Reload failed: {reload_err}")
                 time.sleep(5)
 
-        # ── Auto-recover lost PostgreSQL connection ──
-        elif "connection" in error_msg.lower() and "postgres" in error_msg.lower():
+        # Auto-recover: PostgreSQL connection lost
+        elif "connection" in error_msg.lower():
             print("🔄 PostgreSQL connection lost. Reconnecting...")
             try:
                 pg_conn = psycopg2.connect(
@@ -214,7 +245,7 @@ while True:
                 pg_cursor = pg_conn.cursor()
                 print("✅ PostgreSQL reconnected.")
             except Exception as pg_err:
-                print(f"❌ PostgreSQL reconnect failed: {pg_err}")
+                print(f"❌ Reconnect failed: {pg_err}")
                 time.sleep(5)
 
         else:
@@ -223,26 +254,7 @@ while True:
 # ─────────────────────────────────────────
 # 7. Cleanup on Exit
 # ─────────────────────────────────────────
-
 print("🧹 Cleaning up connections...")
 pg_cursor.close()
 pg_conn.close()
 print("✅ Shutdown complete.")
-
-
-## Kya Badla:
-
-# **Folder structure** ab aisi hogi:
-# ```
-# captured_faces/
-#     P_1743047823000/          ← Person 1 ka folder
-#         cam1_1743047823.jpg
-#         cam1_1743047900.jpg
-#         cam2_1743047950.jpg
-    
-#     P_1743047999000/          ← Person 2 ka folder
-#         cam1_1743047999.jpg
-    
-#     P_1743048100000/          ← Person 3 ka folder
-#         cam2_1743048100.jpg
-#         cam2_1743048200.jpg
