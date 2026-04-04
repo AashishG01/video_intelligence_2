@@ -12,8 +12,8 @@ from insightface.app import FaceAnalysis
 # ─────────────────────────────────────────
 # 1. CORE CONFIGURATION
 # ─────────────────────────────────────────
-CONFIDENCE_GATE   = 0.60   # Minimum face detection confidence
-MATCH_THRESHOLD   = 0.50   # Milvus cosine similarity (higher = more similar)
+CONFIDENCE_GATE   = 0.50   # Matches POC det_thresh spirit
+MATCH_THRESHOLD   = 0.50   # Milvus cosine similarity
 DEDUP_WINDOW_SEC  = 60     # Global dedup window per person (seconds)
 
 # --- NIGHT ENHANCEMENT CONFIG ---
@@ -22,9 +22,9 @@ DARKNESS_THRESHOLD = 60    # If avg brightness is below this, frame is "dark"
 NIGHT_UPSCALE      = 1.0   
 
 # --- QUALITY GATE CONFIG ---
-MIN_FACE_SIZE = 60         # Minimum width/height in pixels
-MIN_SHARPNESS = 80.0       # Laplacian variance (Lower = blurrier)
-MAX_POSE_SKEW = 0.5        # Geometric ratio for Yaw/Pitch
+MIN_FACE_SIZE = 40         # Captures elevated camera faces
+MIN_SHARPNESS = 60.0       # Less aggressive, captures slightly softer faces
+MAX_POSE_SKEW = 0.35       # Allows more natural head angles
 
 # ─────────────────────────────────────────
 # 2. CONNECTIONS
@@ -86,7 +86,7 @@ def enhance_night_frame(frame):
 # ─────────────────────────────────────────
 # 4. QUALITY GATE FUNCTIONS (The Bouncers)
 # ─────────────────────────────────────────
-def is_front_facing(kps, skew_threshold=0.5):
+def is_front_facing(kps, skew_threshold=0.35):
     if kps is None or len(kps) < 5: return False
     le, re, nose, lm, rm = kps 
 
@@ -109,7 +109,7 @@ def is_front_facing(kps, skew_threshold=0.5):
     if pitch_ratio < (skew_threshold - 0.2): return False
     return True
 
-def is_sharp(face_crop, threshold=80.0):
+def is_sharp(face_crop, threshold=60.0):
     if face_crop.size == 0: return False
     gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
     variance = cv2.Laplacian(gray, cv2.CV_64F).var()
@@ -120,6 +120,7 @@ def is_sharp(face_crop, threshold=80.0):
 # ─────────────────────────────────────────
 print("⏳ Loading AntelopeV2 AI model...")
 face_app = FaceAnalysis(name='antelopev2', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+# Using 1024x1024 for the A6000
 face_app.prepare(ctx_id=0, det_thresh=0.45, det_size=(1024, 1024))
 print("✅ Face Worker Online. Awaiting frames...")
 
@@ -182,7 +183,7 @@ while True:
             is_match  = False
             person_id = None
 
-            # ── MILVUS SEARCH ── (No try/except here so errors bubble up!)
+            # ── MILVUS SEARCH ──
             search_res = milvus_client.search(
                 collection_name=COLLECTION_NAME,
                 data=[embedding],
@@ -222,7 +223,7 @@ while True:
 
             r.setex(cache_key, DEDUP_WINDOW_SEC, "1")
 
-            # ── PUBLISH WEBSOCKET ALERT ── (Reusing the main 'r' connection)
+            # ── PUBLISH WEBSOCKET ALERT ──
             r.publish("live_face_alerts", json.dumps({
                 "person_id":  person_id,
                 "camera_id":  cam_id,
