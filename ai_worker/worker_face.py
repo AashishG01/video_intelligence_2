@@ -13,7 +13,7 @@ from insightface.app import FaceAnalysis
 # CONFIGURATION — tune these values
 # ─────────────────────────────────────────
 CONFIDENCE_GATE   = 0.60   # min face detection confidence
-MATCH_THRESHOLD   = 0.50   # milvus cosine similarity (higher = more similar)
+MATCH_THRESHOLD   = 0.60   # milvus cosine similarity (VIP Strictness)
 DEDUP_WINDOW_SEC  = 60     # global dedup window per person (seconds)
 
 # ─────────────────────────────────────────
@@ -67,12 +67,6 @@ os.makedirs(SAVE_FOLDER, exist_ok=True)
 def get_person_folder(person_id: str) -> str:
     """
     Returns path to this person's subfolder, creating it if needed.
-
-    Structure:
-        captured_faces/
-            P_1743047823000/
-                cam1_1743047823.jpg
-                cam2_1743047900.jpg
     """
     folder = os.path.join(SAVE_FOLDER, person_id)
     os.makedirs(folder, exist_ok=True)
@@ -86,8 +80,8 @@ face_app = FaceAnalysis(
     name='antelopev2',
     providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
 )
-# KEY FIX: det_size=640 on full frame — matches your POC accuracy
-face_app.prepare(ctx_id=0, det_thresh=0.45, det_size=(640, 640))
+# Worker is the "Guard" - Needs big eyes and strict rules
+face_app.prepare(ctx_id=0, det_thresh=0.65, det_size=(1024, 1024))
 print("✅ Face Worker Online. Awaiting frames...")
 
 # ─────────────────────────────────────────
@@ -124,14 +118,29 @@ while True:
 
             embedding = face.embedding.tolist()
 
-            # ── Crop just this face for saving ──
+            # ==========================================================
+            # 🚀 PRO LEVEL FIX: MARGIN CROPPING (No more "Creepy Masks")
+            # ==========================================================
             x1, y1, x2, y2 = face.bbox.astype(int)
-            y1, y2 = max(0, y1), min(frame.shape[0], y2)
-            x1, x2 = max(0, x1), min(frame.shape[1], x2)
+            
+            w = x2 - x1
+            h = y2 - y1
+            
+            # Add 25% padding around the face for context (hair, shoulders, background)
+            margin_x = int(w * 0.25)
+            margin_y = int(h * 0.25)
+            
+            # Boundary checks so crop doesn't go outside the image frame
+            y1 = max(0, y1 - margin_y)
+            y2 = min(frame.shape[0], y2 + margin_y)
+            x1 = max(0, x1 - margin_x)
+            x2 = min(frame.shape[1], x2 + margin_x)
+            
             face_crop = frame[y1:y2, x1:x2]
 
             if face_crop.size == 0:
                 continue
+            # ==========================================================
 
             # ── Milvus similarity search ──
             is_match  = False
@@ -149,15 +158,12 @@ while True:
                 if search_res and len(search_res[0]) > 0:
                     top   = search_res[0][0]
                     dist  = top['distance']
-                    print(f"🔍 [{cam_id}] Distance: {dist:.4f} (threshold: {MATCH_THRESHOLD})")
-
+                    
+                    # NOTE: MATCH_THRESHOLD changed to 0.60 above for bulletproof DB
                     if dist > MATCH_THRESHOLD:
                         person_id = top['entity']['person_id']
                         is_match  = True
-                        print(f"✅ MATCH: {person_id}")
-                    else:
-                        print(f"❌ NO MATCH: {dist:.4f} < {MATCH_THRESHOLD}. New person.")
-
+                        
             except Exception as search_err:
                 print(f"⚠️  Milvus search error: {search_err}")
                 continue
@@ -173,7 +179,7 @@ while True:
             # ── Get or create person's subfolder ──
             person_folder = get_person_folder(person_id)
 
-            # ── Save face crop into person's folder ──
+            # ── Save Passport-style face crop into person's folder ──
             filename  = f"{cam_id}_{int(timestamp)}.jpg"
             filepath  = os.path.join(person_folder, filename)
             cv2.imwrite(filepath, face_crop)

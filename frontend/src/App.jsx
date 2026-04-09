@@ -12,7 +12,6 @@ import {
   BarChart3,
   Terminal,
   Hash,
-  Activity,
   Wifi,
   WifiOff,
   Camera,
@@ -25,19 +24,24 @@ import {
 // CONFIGURATION
 // ==========================================
 const BACKEND_URL = "http://localhost:8000";
+const WS_URL = "ws://localhost:8000/ws/live_alerts";
 
-const MOCK_LIVE_FEED = [
-  { id: 1, cam: "Zampa Bazar Cam", time: "Just now", img: "https://i.pravatar.cc/150?img=11" },
-  { id: 2, cam: "Gopi Talav Cam",  time: "1 min ago", img: "https://i.pravatar.cc/150?img=12" },
-];
+// Helper to fix image paths coming from backend
+const getImageUrl = (path) => {
+  if (!path) return 'https://via.placeholder.com/150/f1f5f9/94a3b8?text=NO+IMG';
+  if (path.startsWith('http')) return path;
+  // If path from WS is /captured_faces/..., convert to /images/... as mounted in FastAPI
+  const cleanPath = path.replace('/captured_faces/', '/images/');
+  return `${BACKEND_URL}${cleanPath}`;
+};
 
 // ==========================================
 // COMPONENT: Sighting Card
 // ==========================================
 const SightingCard = ({ data }) => {
   const confidencePercent = (data.match_score * 100).toFixed(1);
-  const isHighConf        = data.match_score >= 0.45;
-  const fullImageUrl      = `${BACKEND_URL}${data.image_url}`;
+  const isHighConf        = data.match_score >= 0.50;
+  const fullImageUrl      = getImageUrl(data.image_url);
 
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center shadow-sm hover:shadow-md transition-shadow">
@@ -72,7 +76,7 @@ const SightingCard = ({ data }) => {
 // COMPONENT: Timeline Card
 // ==========================================
 const TimelineCard = ({ data }) => {
-  const fullImageUrl = `${BACKEND_URL}${data.image_url}`;
+  const fullImageUrl = getImageUrl(data.image_url);
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center shadow-sm hover:shadow-md transition-shadow">
       <img
@@ -133,7 +137,7 @@ const SystemStatusView = () => {
       }
     };
     fetchStats();
-    const interval = setInterval(fetchStats, 5000);
+    const interval = setInterval(fetchStats, 5000); // Auto refresh every 5s
     return () => clearInterval(interval);
   }, []);
 
@@ -141,7 +145,7 @@ const SystemStatusView = () => {
     <div className="max-w-4xl mx-auto py-8 px-6">
       <div className="mb-8">
         <h2 className="text-2xl font-bold text-slate-800 mb-2">System Status</h2>
-        <p className="text-slate-500">Live statistics from the surveillance backend.</p>
+        <p className="text-slate-500">Live statistics from the surveillance PostgreSQL backend.</p>
       </div>
 
       {isLoading && (
@@ -164,10 +168,7 @@ const SystemStatusView = () => {
             stats.status === 'ONLINE' ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'
           }`}>
             <div className="flex items-center">
-              {stats.status === 'ONLINE'
-                ? <Wifi    className="w-5 h-5 text-emerald-600 mr-3" />
-                : <WifiOff className="w-5 h-5 text-red-600 mr-3" />
-              }
+              {stats.status === 'ONLINE' ? <Wifi className="w-5 h-5 text-emerald-600 mr-3" /> : <WifiOff className="w-5 h-5 text-red-600 mr-3" />}
               <div>
                 <p className={`font-semibold text-sm ${stats.status === 'ONLINE' ? 'text-emerald-800' : 'text-red-800'}`}>
                   Network: {stats.status || 'OFFLINE'}
@@ -175,13 +176,9 @@ const SystemStatusView = () => {
                 <p className="text-xs text-slate-500 mt-0.5">AI Core: ANTELOPE-V2 Active</p>
               </div>
             </div>
-            <span className={`flex items-center text-xs font-medium px-3 py-1.5 rounded-full ${
-              stats.status === 'ONLINE' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
-            }`}>
-              <span className={`w-2 h-2 rounded-full mr-2 ${
-                stats.status === 'ONLINE' ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'
-              }`}></span>
-              {stats.status === 'ONLINE' ? 'Connected' : 'Disconnected'}
+            <span className={`flex items-center text-xs font-medium px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-700`}>
+              <span className="w-2 h-2 rounded-full mr-2 bg-emerald-500 animate-pulse"></span>
+              Connected
             </span>
           </div>
 
@@ -189,24 +186,8 @@ const SystemStatusView = () => {
             <StatCard icon={ScanFace} label="Total Captures"   value={stats.total_faces_captured || 0} color="bg-blue-500"    />
             <StatCard icon={Users}    label="Unique Suspects"  value={stats.unique_suspects || 0}      color="bg-violet-500"  />
             <StatCard icon={Camera}   label="Active Cameras"   value={stats.active_cameras || 0}       color="bg-amber-500"   />
-            <StatCard icon={Timer}    label="System Start"     value={stats.system_start_time ? stats.system_start_time.split(' ')[0] : 'N/A'} color="bg-emerald-500" />
+            <StatCard icon={Timer}    label="System Start"     value={stats.system_start_time || 'N/A'} color="bg-emerald-500" />
           </div>
-
-          {stats.camera_ids && stats.camera_ids.length > 0 && (
-            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-              <h3 className="font-semibold text-slate-800 mb-4 flex items-center">
-                <Camera className="w-4 h-4 mr-2 text-blue-500" />
-                Active Camera Feeds
-              </h3>
-              <div className="flex flex-wrap gap-2">
-                {stats.camera_ids.map((camId, idx) => (
-                  <span key={idx} className="px-3 py-1.5 text-sm font-medium bg-slate-100 text-slate-700 rounded-lg border border-slate-200">
-                    {camId}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
         </>
       )}
     </div>
@@ -214,35 +195,9 @@ const SystemStatusView = () => {
 };
 
 // ==========================================
-// COMPONENT: Event Feed View
+// COMPONENT: Event Feed View (Real WebSocket Data)
 // ==========================================
-const EventFeedView = () => {
-  const [logs, setLogs] = useState([
-    { time: new Date().toLocaleTimeString(), msg: "INITIALIZING C.O.R.E. SYSTEMS...",    type: "system"  },
-    { time: new Date().toLocaleTimeString(), msg: "ESTABLISHING SECURE CONNECTION...",   type: "system"  },
-    { time: new Date().toLocaleTimeString(), msg: "ACCESS GRANTED: AGENT TINU.",         type: "success" },
-  ]);
-
-  useEffect(() => {
-    const events = [
-      { msg: "Running biometric analysis...",                              type: "info"    },
-      { msg: "Intercepting RTSP stream 172.16.0.151...",                   type: "info"    },
-      { msg: "Calibrating cosine distance thresholds...",                  type: "info"    },
-      { msg: "New frame captured. Extracting vectors...",                  type: "success" },
-      { msg: "Matching embeddings against ChromaDB...",                    type: "info"    },
-      { msg: "Face detected — generating embedding vector...",             type: "success" },
-      { msg: "Suspect match candidate identified — confidence 87.3%",      type: "warning" },
-      { msg: "Periodic health check — all subsystems nominal.",            type: "system"  },
-      { msg: "Archiving batch embeddings to persistent storage...",        type: "info"    },
-      { msg: "Camera feed 172.16.0.152 reconnected.",                      type: "success" },
-    ];
-    const logInterval = setInterval(() => {
-      const randomEvent = events[Math.floor(Math.random() * events.length)];
-      setLogs(prev => [{ time: new Date().toLocaleTimeString(), ...randomEvent }, ...prev].slice(0, 50));
-    }, 2500);
-    return () => clearInterval(logInterval);
-  }, []);
-
+const EventFeedView = ({ systemLogs }) => {
   const getTypeStyle = (type) => {
     switch (type) {
       case 'success': return 'text-emerald-400';
@@ -265,12 +220,11 @@ const EventFeedView = () => {
     <div className="max-w-4xl mx-auto py-8 px-6">
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800 mb-2">Event Feed</h2>
-          <p className="text-slate-500">Real-time surveillance system events and activity log.</p>
+          <h2 className="text-2xl font-bold text-slate-800 mb-2">Live Event Feed</h2>
+          <p className="text-slate-500">Real-time WebSocket stream from Redis & Milvus.</p>
         </div>
         <span className="flex items-center text-sm font-medium text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200">
-          <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse mr-2"></span>
-          Live
+          <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse mr-2"></span> Live
         </span>
       </div>
 
@@ -281,17 +235,12 @@ const EventFeedView = () => {
             <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
             <div className="w-3 h-3 rounded-full bg-green-500"></div>
           </div>
-          <span className="text-xs text-slate-400 font-mono">C.O.R.E. — Surveillance Event Stream</span>
+          <span className="text-xs text-slate-400 font-mono">C.O.R.E. — AI Worker Stream</span>
         </div>
 
-        <div className="p-4 max-h-[600px] overflow-y-auto space-y-1 font-mono text-sm">
-          {logs.map((log, index) => (
-            <div
-              key={index}
-              className={`flex items-start py-1.5 px-2 rounded transition-all ${
-                index === 0 ? 'bg-slate-800/60' : 'hover:bg-slate-800/40'
-              }`}
-            >
+        <div className="p-4 h-[600px] overflow-y-auto space-y-1 font-mono text-sm flex flex-col-reverse">
+          {systemLogs.map((log, index) => (
+            <div key={index} className={`flex items-start py-1.5 px-2 rounded transition-all hover:bg-slate-800/40`}>
               <span className="text-slate-600 mr-3 flex-shrink-0 text-xs mt-0.5">[{log.time}]</span>
               <span className={`border text-xs px-1.5 py-0.5 rounded mr-3 flex-shrink-0 uppercase ${getTypeBadge(log.type)}`}>
                 {log.type}
@@ -317,6 +266,9 @@ const InvestigatorView = () => {
   const [previewUrl, setPreviewUrl]       = useState(null);
   const [errorMsg, setErrorMsg]           = useState(null);
   const fileInputRef                      = useRef(null);
+
+  // 👉 1. STATE FIX: Slider ka state add kiya (Default 0.60)
+  const [searchThreshold, setSearchThreshold] = useState(0.60);
 
   const [searchId, setSearchId]               = useState("");
   const [isIdSearching, setIsIdSearching]     = useState(false);
@@ -349,8 +301,10 @@ const InvestigatorView = () => {
     setErrorMsg(null);
     const formData = new FormData();
     formData.append("file", selectedFile);
+    
     try {
-      const response = await fetch(`${BACKEND_URL}/api/investigate/search_by_image?threshold=0.57`, {
+      // 👉 2. DYNAMIC URL FIX: Yahan hardcoded 0.60 ko hata ke variable lagaya
+      const response = await fetch(`${BACKEND_URL}/api/investigate/search_by_image?threshold=${searchThreshold}`, {
         method: 'POST',
         body: formData,
       });
@@ -457,24 +411,54 @@ const InvestigatorView = () => {
             </div>
           )}
 
+          {/* 👉 3. UI FIX: Tailwind Slider */}
+          <div className="mb-6 p-5 bg-white border border-slate-200 rounded-xl shadow-sm">
+            <div className="flex justify-between items-center mb-3">
+              <label className="text-sm font-semibold text-slate-700 flex items-center">
+                <AlertCircle className="w-4 h-4 mr-2 text-blue-500" />
+                AI Strictness Level (Threshold)
+              </label>
+              <span className="text-sm font-bold bg-blue-50 text-blue-700 px-3 py-1 rounded-md">
+                {searchThreshold.toFixed(2)}
+              </span>
+            </div>
+            
+            <input 
+              type="range" 
+              min="0.30" 
+              max="0.90" 
+              step="0.05" 
+              value={searchThreshold} 
+              onChange={(e) => setSearchThreshold(parseFloat(e.target.value))}
+              className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+            />
+            
+            <div className="mt-3 text-xs font-medium text-center">
+              {searchThreshold < 0.55 ? (
+                <span className="text-amber-600">⚠️ Loose: Might match similar looking innocent people</span>
+              ) : searchThreshold > 0.65 ? (
+                <span className="text-rose-500">⚠️ Strict: Might miss valid faces if lighting is poor</span>
+              ) : (
+                <span className="text-emerald-600">✅ Optimal "Sweet Spot" for accurate results</span>
+              )}
+            </div>
+          </div>
+
           <div className="flex items-center gap-4 mb-8">
-            <select className="flex-1 bg-white border border-slate-200 text-slate-700 rounded-lg px-4 py-2.5 outline-none focus:border-blue-500">
-              <option>All Cameras</option>
-            </select>
             <button
               onClick={handleSearch}
               disabled={isSearching || !selectedFile}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-8 py-2.5 rounded-lg flex items-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-8 py-2.5 rounded-lg flex items-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed w-full justify-center"
             >
               {isSearching ? <Loader2 className="w-5 h-5 mr-2 animate-spin" /> : <Search className="w-5 h-5 mr-2" />}
-              {isSearching ? 'Analyzing...' : 'Search'}
+              {isSearching ? 'Analyzing Milvus Vectors...' : 'Search Surveillance Database'}
             </button>
           </div>
 
           {isSearching && (
             <div className="text-center py-12">
               <Loader2 className="w-10 h-10 text-blue-500 animate-spin mx-auto mb-4" />
-              <p className="text-slate-500 font-medium">Scanning surveillance database for vector matches...</p>
+              <p className="text-slate-500 font-medium">Scanning 512-d vector database...</p>
             </div>
           )}
 
@@ -510,7 +494,7 @@ const InvestigatorView = () => {
                 <input
                   type="text"
                   className="w-full bg-slate-50 border border-slate-200 text-slate-700 rounded-lg pl-10 pr-4 py-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all"
-                  placeholder="person_xxxxxxxx"
+                  placeholder="e.g. P_17000000"
                   value={searchId}
                   onChange={(e) => setSearchId(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleIdSearch()}
@@ -537,7 +521,7 @@ const InvestigatorView = () => {
           {isIdSearching && (
             <div className="text-center py-12">
               <Loader2 className="w-10 h-10 text-blue-500 animate-spin mx-auto mb-4" />
-              <p className="text-slate-500 font-medium">Pulling dossier from surveillance database...</p>
+              <p className="text-slate-500 font-medium">Pulling dossier from PostgreSQL...</p>
             </div>
           )}
 
@@ -558,15 +542,15 @@ const InvestigatorView = () => {
                         </div>
                         <div className="bg-slate-50 rounded-lg p-3">
                           <p className="text-xs text-slate-500 uppercase font-medium">First Seen</p>
-                          <p className="text-sm font-semibold text-slate-800">{personDossier.first_seen}</p>
+                          <p className="text-sm font-semibold text-slate-800">{personDossier.first_seen.split(' ')[1]}</p>
                         </div>
                         <div className="bg-slate-50 rounded-lg p-3">
                           <p className="text-xs text-slate-500 uppercase font-medium">Last Seen</p>
-                          <p className="text-sm font-semibold text-slate-800">{personDossier.last_seen}</p>
+                          <p className="text-sm font-semibold text-slate-800">{personDossier.last_seen.split(' ')[1]}</p>
                         </div>
                         <div className="bg-slate-50 rounded-lg p-3">
                           <p className="text-xs text-slate-500 uppercase font-medium">Locations</p>
-                          <p className="text-sm font-semibold text-slate-800">{personDossier.locations?.join(', ') || 'N/A'}</p>
+                          <p className="text-sm font-semibold text-slate-800">{personDossier.locations?.length || 0} Cameras</p>
                         </div>
                       </div>
                     </div>
@@ -583,7 +567,6 @@ const InvestigatorView = () => {
                 <div className="text-center py-12 bg-white rounded-2xl border border-slate-200">
                   <Search className="w-12 h-12 text-slate-300 mx-auto mb-4" />
                   <h3 className="text-lg font-medium text-slate-800">No Records Found</h3>
-                  <p className="text-slate-500">This person ID does not exist in the surveillance database.</p>
                 </div>
               )}
             </div>
@@ -595,9 +578,9 @@ const InvestigatorView = () => {
 };
 
 // ==========================================
-// COMPONENT: Live Monitor View
+// COMPONENT: Live Monitor View (With Real Sidebar)
 // ==========================================
-const LiveMonitorView = () => {
+const LiveMonitorView = ({ liveAlerts }) => {
   const cameras = [
     { id: "cam1", label: "Lab cam 1"},
     { id: "cam2", label: "Lab cam 2"},
@@ -627,14 +610,11 @@ const LiveMonitorView = () => {
         <div className="grid grid-cols-2 gap-4">
           {cameras.map((cam) => (
             <div key={cam.id} className="bg-slate-800 rounded-xl overflow-hidden relative group">
-
-              {/* Camera Label */}
               <div className="absolute top-3 left-3 z-10 text-white text-xs font-medium bg-black/60 px-3 py-1 rounded-md backdrop-blur-sm flex items-center">
                 <span className={`w-2 h-2 rounded-full mr-2 ${camStatus[cam.id] ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}></span>
                 {cam.label}
               </div>
 
-              {/* MJPEG Stream */}
               {camStatus[cam.id] ? (
                 <img
                   src={`${BACKEND_URL}/api/stream/${cam.id}`}
@@ -643,10 +623,9 @@ const LiveMonitorView = () => {
                   onError={() => handleStreamError(cam.id)}
                 />
               ) : (
-                /* Offline Placeholder */
                 <div className="w-full aspect-video flex flex-col items-center justify-center text-slate-500 bg-slate-900">
                   <MonitorPlay className="w-12 h-12 opacity-30 mb-2" />
-                  <p className="text-xs opacity-50 font-medium">Camera Offline</p>
+                  <p className="text-xs opacity-50 font-medium">Camera Offline / Waiting</p>
                   <p className="text-xs opacity-30 mt-1">{cam.label}</p>
                 </div>
               )}
@@ -655,21 +634,32 @@ const LiveMonitorView = () => {
         </div>
       </div>
 
-      {/* Recent Activity Sidebar */}
+      {/* REAL-TIME Activity Sidebar */}
       <div className="w-80 bg-white border-l border-slate-200 flex flex-col h-full">
-        <div className="p-4 border-b border-slate-100">
-          <h3 className="font-semibold text-slate-800">Recent Activity</h3>
+        <div className="p-4 border-b border-slate-100 flex justify-between items-center">
+          <h3 className="font-semibold text-slate-800">Live Captures</h3>
+          <span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-full font-bold">{liveAlerts.length}</span>
         </div>
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {MOCK_LIVE_FEED.map((feed) => (
-            <div key={feed.id} className="flex items-center space-x-3 p-2 hover:bg-slate-50 rounded-lg transition-colors cursor-default">
-              <img src={feed.img} alt="Capture" className="w-10 h-10 rounded-full border border-slate-200" />
-              <div>
-                <p className="text-sm font-medium text-slate-800">{feed.cam}</p>
-                <p className="text-xs text-slate-500">{feed.time}</p>
+          {liveAlerts.length === 0 ? (
+            <div className="text-center text-slate-400 text-sm mt-10">Waiting for AI detections...</div>
+          ) : (
+            liveAlerts.map((alert, idx) => (
+              <div key={idx} className="flex items-center justify-between p-2 hover:bg-slate-50 rounded-lg border border-transparent hover:border-slate-100 transition-colors">
+                <div className="flex items-center space-x-3">
+                  <img src={getImageUrl(alert.image_path)} alt="Capture" className="w-12 h-12 rounded-full border border-slate-200 object-cover" />
+                  <div>
+                    <p className="text-sm font-bold text-slate-800">{alert.camera_id}</p>
+                    <p className="text-xs font-medium text-slate-500 mb-0.5">{alert.person_id.substring(0, 10)}...</p>
+                    <p className="text-[10px] text-slate-400">{new Date(alert.timestamp * 1000).toLocaleTimeString()}</p>
+                  </div>
+                </div>
+                {alert.status === "MATCH" && (
+                  <AlertCircle className="w-4 h-4 text-amber-500" />
+                )}
               </div>
-            </div>
-          ))}
+            ))
+          )}
         </div>
       </div>
     </div>
@@ -677,10 +667,58 @@ const LiveMonitorView = () => {
 };
 
 // ==========================================
-// MAIN APP
+// MAIN APP COMPONENT (Global State & WebSocket)
 // ==========================================
 export default function App() {
   const [currentView, setCurrentView] = useState('investigator');
+  const [liveAlerts, setLiveAlerts] = useState([]);
+  const [systemLogs, setSystemLogs] = useState([
+    { time: new Date().toLocaleTimeString(), msg: "INITIALIZING C.O.R.E. SYSTEMS...", type: "system" }
+  ]);
+
+  // Global WebSocket Connection
+  useEffect(() => {
+    let ws;
+    let isConnected = false;
+
+    const connectWebSocket = () => {
+      ws = new WebSocket(WS_URL);
+
+      ws.onopen = () => {
+        isConnected = true;
+        setSystemLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: "Connected to AI Redis Stream via WebSocket.", type: "success" }, ...prev]);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          // 1. Update Sidebar
+          setLiveAlerts(prev => [data, ...prev].slice(0, 50));
+
+          // 2. Update Event Feed Logs
+          const statusText = data.status === "MATCH" ? "MATCH FOUND" : "NEW SUBJECT";
+          const logType = data.status === "MATCH" ? "warning" : "success";
+          const logMsg = `[${data.camera_id}] ${statusText}: ${data.person_id} (Conf: ${(data.confidence * 100).toFixed(1)}%)`;
+          
+          setSystemLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: logMsg, type: logType }, ...prev].slice(0, 100));
+        } catch (err) {
+          console.error("Failed to parse WS message", err);
+        }
+      };
+
+      ws.onclose = () => {
+        if (isConnected) {
+          setSystemLogs(prev => [{ time: new Date().toLocaleTimeString(), msg: "WebSocket disconnected. Reconnecting in 5s...", type: "system" }, ...prev]);
+          isConnected = false;
+        }
+        setTimeout(connectWebSocket, 5000);
+      };
+    };
+
+    connectWebSocket();
+    return () => { if (ws) ws.close(); };
+  }, []);
 
   const navItems = [
     { id: 'monitor',      label: 'Live Monitor',   icon: MonitorPlay },
@@ -691,20 +729,20 @@ export default function App() {
 
   const renderView = () => {
     switch (currentView) {
-      case 'monitor':      return <LiveMonitorView />;
+      case 'monitor':      return <LiveMonitorView liveAlerts={liveAlerts} />;
       case 'investigator': return <InvestigatorView />;
       case 'status':       return <SystemStatusView />;
-      case 'feed':         return <EventFeedView />;
+      case 'feed':         return <EventFeedView systemLogs={systemLogs} />;
       default:             return <InvestigatorView />;
     }
   };
 
   return (
     <div className="flex h-screen w-full font-sans">
-      <nav className="w-64 bg-white border-r border-slate-200 flex flex-col z-10">
+      <nav className="w-64 bg-white border-r border-slate-200 flex flex-col z-10 shadow-sm">
         <div className="p-6 border-b border-slate-100">
-          <div className="flex items-center text-blue-600 font-bold text-xl tracking-tight">
-            <MonitorPlay className="w-6 h-6 mr-2" />
+          <div className="flex items-center text-blue-600 font-bold text-2xl tracking-tight">
+            <MonitorPlay className="w-7 h-7 mr-2" />
             C.O.R.E.
           </div>
           <div className="text-xs text-slate-400 mt-1 uppercase font-semibold tracking-wider">Surveillance Engine</div>
@@ -715,10 +753,10 @@ export default function App() {
             <button
               key={item.id}
               onClick={() => setCurrentView(item.id)}
-              className={`w-full flex items-center px-3 py-2.5 rounded-lg font-medium transition-colors ${
+              className={`w-full flex items-center px-3 py-3 rounded-lg font-medium transition-colors ${
                 currentView === item.id
                   ? 'bg-blue-50 text-blue-700'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
               <item.icon className="w-5 h-5 mr-3" />

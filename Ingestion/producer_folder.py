@@ -5,12 +5,18 @@ import time
 import redis
 import json
 import base64
+import math
 
 # Connect to local Redis
+print("⏳ Connecting to Redis...")
 r = redis.Redis(host='localhost', port=6379, db=0)
 
 class VideoFileProducer(threading.Thread):
-    def __init__(self, filepath, fps_limit=1):
+    def __init__(self, filepath, process_every_n_seconds=1):
+        """
+        process_every_n_seconds: Agar 1 hai, toh har 1 second ke video mein se 1 frame uthayega.
+        Baaki ke frames ko super-fast skip kar dega bina CPU/RAM par load dale.
+        """
         threading.Thread.__init__(self)
         self.filepath = filepath
         
@@ -20,26 +26,46 @@ class VideoFileProducer(threading.Thread):
         raw_name = os.path.splitext(os.path.basename(filepath))[0].replace(" ", "_")
         self.camera_id = raw_name[:45] 
         
-        self.fps_limit = fps_limit
+        self.process_every_n_seconds = process_every_n_seconds
         self.running = True
 
     def run(self):
-        print(f"[{self.camera_id}] 🎬 Starting playback at {self.fps_limit} FPS...")
         cap = cv2.VideoCapture(self.filepath)
         
-        while self.running:
-            start_time = time.time()
+        # 1. Get the actual FPS of the video
+        video_fps = cap.get(cv2.CAP_PROP_FPS)
+        
+        # Fallback if OpenCV fails to read FPS
+        if video_fps <= 0 or math.isnan(video_fps): 
+            video_fps = 25.0 
             
+        frames_to_skip = int(video_fps * self.process_every_n_seconds)
+        
+        print(f"[{self.camera_id}] 🎬 Starting Full-Speed Ingestion...")
+        print(f"[{self.camera_id}] ⚡ Video FPS: {video_fps:.1f} | Processing 1 frame every {frames_to_skip} frames.")
+        
+        frame_counter = 0
+        
+        while self.running:
+            # Read frame at maximum possible disk speed
             ret, frame = cap.read()
             if not ret:
                 print(f"[{self.camera_id}] ✅ Video Finished. Thread exiting.")
-                break # Video ended, kill the thread
+                break 
+                
+            frame_counter += 1
             
             # --------------------------------------------------
-            # TASK 1: Feed the AI Workers (High Quality, 720p)
+            # THE ACCELERATOR: FRAME SKIPPING LOGIC
+            # --------------------------------------------------
+            if frame_counter % frames_to_skip != 0:
+                continue # Skip all other frames instantly
+            
+            # --------------------------------------------------
+            # TASK 1: Feed the AI Workers (High Quality, 720p/1080p)
             # --------------------------------------------------
             ai_frame = cv2.resize(frame, (1280, 720))
-            _, ai_buffer = cv2.imencode('.jpg', ai_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            _, ai_buffer = cv2.imencode('.jpg', ai_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
             ai_base64 = base64.b64encode(ai_buffer).decode('utf-8')
             
             payload = {
@@ -50,7 +76,7 @@ class VideoFileProducer(threading.Thread):
             
             # Push to the AI queue
             r.lpush("raw_frames_queue", json.dumps(payload))
-            # Prevent RAM explosion if AI workers are offline
+            # Prevent RAM explosion if AI workers are processing slower than Producer
             r.ltrim("raw_frames_queue", 0, 1000) 
             
             # --------------------------------------------------
@@ -62,13 +88,6 @@ class VideoFileProducer(threading.Thread):
             
             # Overwrite the latest frame for the UI video player
             r.set(f"latest_frame_{self.camera_id}", web_base64)
-            
-            # --------------------------------------------------
-            # The Throttle: Prevent the file from reading at 500 FPS
-            # --------------------------------------------------
-            elapsed = time.time() - start_time
-            sleep_time = max(0, (1.0 / self.fps_limit) - elapsed)
-            time.sleep(sleep_time)
 
         cap.release()
 
@@ -97,17 +116,20 @@ if __name__ == "__main__":
     threads = []
     try:
         for filepath in video_files:
-            # Create a thread for each video file
-            t = VideoFileProducer(filepath, fps_limit=1)
+            # ----------------------------------------------------
+            # ⚙️ SET FRAME SKIP HERE (Currently set to 1 second)
+            # ----------------------------------------------------
+            t = VideoFileProducer(filepath, process_every_n_seconds=1)
             t.start()
             threads.append(t)
             
-        print("✅ All video threads running. Press Ctrl+C to stop.")
+        print("✅ All video threads running at FULL DISK SPEED. Press Ctrl+C to stop.")
         
+        # Dashboard loop to monitor queue
         while any(t.is_alive() for t in threads):
             queue_size = r.llen("raw_frames_queue")
-            print(f"Current Redis AI Queue Size: {queue_size} frames waiting", end='\r')
-            time.sleep(1)
+            print(f"🔥 Redis AI Queue: {queue_size} frames waiting to be processed...", end='\r')
+            time.sleep(0.5)
             
         print("\n🏁 All videos finished processing.")
             
