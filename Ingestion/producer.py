@@ -60,15 +60,7 @@ class CameraProducer(threading.Thread):
             # Prevent RAM explosion if AI crashes
             r.ltrim("raw_frames_queue", 0, 1000) 
             
-            # --------------------------------------------------
-            # TASK 2: Feed the React Dashboard (Low Bandwidth, 360p)
-            # --------------------------------------------------
-            web_frame = cv2.resize(frame, (640, 360))
-            _, web_buffer = cv2.imencode('.jpg', web_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
-            web_base64 = base64.b64encode(web_buffer).decode('utf-8')
-            
-            # Instantly overwrite the "live feed" key that FastAPI pulls from
-            r.set(f"latest_frame_{self.camera_id}", web_base64)
+            # TASK 2 (Web Feed) IS DELETED! 🚀 Frontend is handling it natively via WebRTC!
             
             # --------------------------------------------------
             # Enforce Indian Street Density FPS Limits (Tier 1 = 1 FPS)

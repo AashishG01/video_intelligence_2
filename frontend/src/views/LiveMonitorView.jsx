@@ -31,7 +31,7 @@ const WebRTCPlayer = ({ camId, label, onError }) => {
                 await pc.setLocalDescription(offer);
 
                 // Send offer to MediaMTX WebRTC endpoint
-                const response = await fetch(`${MEDIAMTX_URL}/${camId}/webrtc`, {
+                const response = await fetch(`${MEDIAMTX_URL}/${camId}/whep`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/sdp' },
                     body: pc.localDescription.sdp,
