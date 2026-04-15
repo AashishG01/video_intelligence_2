@@ -151,7 +151,8 @@ while True:
                 cos_sim = np.dot(A_np, target_emb) / (np.linalg.norm(A_np) * np.linalg.norm(target_emb))
                 if cos_sim > MATCH_THRESHOLD:
                     is_target_match = True
-                    person_id = r.get("LIVE_TARGET_ID")
+                    target_id_val = r.get("LIVE_TARGET_ID")
+                    person_id = target_id_val.decode('utf-8') if target_id_val else "TARGET_VIP"
 
             # ── Milvus similarity search ──
             is_match  = False
