@@ -28,6 +28,7 @@ const WebRTCPlayer = ({ camId, label, onError }) => {
                 };
 
                 const offer = await pc.createOffer();
+                if (!isActive) return;
                 await pc.setLocalDescription(offer);
 
                 // Send offer to MediaMTX WebRTC endpoint
@@ -37,11 +38,14 @@ const WebRTCPlayer = ({ camId, label, onError }) => {
                     body: pc.localDescription.sdp,
                 });
 
+                if (!isActive) return;
                 if (!response.ok) {
-                    throw new Error('MediaMTX WebRTC API failed');
+                    throw new Error(`MediaMTX WHEP failed with HTTP ${response.status}`);
                 }
 
                 const answerSdp = await response.text();
+                if (!isActive) return;
+
                 await pc.setRemoteDescription(new RTCSessionDescription({
                     type: 'answer',
                     sdp: answerSdp
