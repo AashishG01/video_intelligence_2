@@ -141,7 +141,51 @@ async def get_system_stats():
     }
 
 # ==========================================
-# 7. SEARCH BY IMAGE
+# 7. LIVE TARGET MANAGEMENT
+# ==========================================
+@app.post("/api/target/set")
+async def set_live_target(file: UploadFile = File(...)):
+    """Sets the given image as the active live target in Redis for instant worker matching."""
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    faces = face_app.get(img)
+    if not faces:
+        raise HTTPException(status_code=400, detail="No face detected in target image.")
+
+    # Sort faces by bounding box area to get the largest prominent face
+    faces = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]), reverse=True)
+    target_embedding = faces[0].embedding.tolist()
+
+    target_id = f"TARGET_{int(time.time())}"
+    filename = f"{target_id}.jpg"
+    
+    # Save directly to images folder for UI rendering
+    filepath = os.path.join(SAVE_FOLDER, filename)
+    cv2.imwrite(filepath, img)
+
+    # Register in Redis for the Python Worker `worker_face.py` to instantly check
+    r.set("LIVE_TARGET_EMBEDDING", json.dumps(target_embedding))
+    r.set("LIVE_TARGET_IMAGE", f"/images/{filename}")
+    r.set("LIVE_TARGET_ID", target_id)
+
+    return {
+        "status": "Target Set", 
+        "target_id": target_id,
+        "target_image": f"/images/{filename}"
+    }
+
+@app.delete("/api/target/clear")
+async def clear_live_target():
+    """Removes the active live target."""
+    r.delete("LIVE_TARGET_EMBEDDING")
+    r.delete("LIVE_TARGET_IMAGE")
+    r.delete("LIVE_TARGET_ID")
+    return {"status": "Target Cleared"}
+
+# ==========================================
+# 8. SEARCH BY IMAGE
 # ==========================================
 @app.post("/api/investigate/search_by_image")
 async def search_by_image(

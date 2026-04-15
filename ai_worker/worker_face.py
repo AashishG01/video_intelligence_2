@@ -138,35 +138,46 @@ while True:
             
             face_crop = frame[y1:y2, x1:x2]
 
-            if face_crop.size == 0:
-                continue
             # ==========================================================
+
+            # ── LIVE TARGET MATCHING ──
+            is_target_match = False
+            person_id = None
+            target_data = r.get("LIVE_TARGET_EMBEDDING")
+            
+            if target_data:
+                target_emb = np.array(json.loads(target_data))
+                A_np = face.embedding
+                cos_sim = np.dot(A_np, target_emb) / (np.linalg.norm(A_np) * np.linalg.norm(target_emb))
+                if cos_sim > MATCH_THRESHOLD:
+                    is_target_match = True
+                    person_id = r.get("LIVE_TARGET_ID")
 
             # ── Milvus similarity search ──
             is_match  = False
-            person_id = None
 
-            try:
-                search_res = milvus_client.search(
-                    collection_name=COLLECTION_NAME,
-                    data=[embedding],
-                    limit=1,
-                    output_fields=["person_id"],
-                    search_params={"metric_type": "COSINE", "params": {"nprobe": 10}}
-                )
+            if not is_target_match:
+                try:
+                    search_res = milvus_client.search(
+                        collection_name=COLLECTION_NAME,
+                        data=[embedding],
+                        limit=1,
+                        output_fields=["person_id"],
+                        search_params={"metric_type": "COSINE", "params": {"nprobe": 10}}
+                    )
 
-                if search_res and len(search_res[0]) > 0:
-                    top   = search_res[0][0]
-                    dist  = top['distance']
-                    
-                    # NOTE: MATCH_THRESHOLD changed to 0.60 above for bulletproof DB
-                    if dist > MATCH_THRESHOLD:
-                        person_id = top['entity']['person_id']
-                        is_match  = True
+                    if search_res and len(search_res[0]) > 0:
+                        top   = search_res[0][0]
+                        dist  = top['distance']
                         
-            except Exception as search_err:
-                print(f"⚠️  Milvus search error: {search_err}")
-                continue
+                        # NOTE: MATCH_THRESHOLD changed to 0.60 above for bulletproof DB
+                        if dist > MATCH_THRESHOLD:
+                            person_id = top['entity']['person_id']
+                            is_match  = True
+                            
+                except Exception as search_err:
+                    print(f"⚠️  Milvus search error: {search_err}")
+                    continue
 
             if not person_id:
                 person_id = f"P_{int(time.time() * 1000)}"
@@ -204,18 +215,30 @@ while True:
 
             # ── Publish real-time alert to dashboard ──
             r_pub = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+            
+            # Determine WebSocket status tag
+            ws_status = "NEW"
+            if is_target_match:
+                ws_status = "TARGET_MATCH"
+            elif is_match:
+                ws_status = "MATCH"
+                
             r_pub.publish("live_face_alerts", json.dumps({
                 "person_id":  person_id,
                 "camera_id":  cam_id,
                 "timestamp":  timestamp,
                 "image_path": relative_path,
                 "confidence": round(float(face.det_score), 3),
-                "status":     "MATCH" if is_match else "NEW"
+                "status":     ws_status
             }))
             r_pub.close()
 
-            status = "MATCH ✅" if is_match else "NEW 🆕"
-            print(f"[{cam_id}] 💾 {status}: {person_id} "
+            if is_target_match:
+                status_log = "🚨 TARGET FOUND"
+            else:
+                status_log = "MATCH ✅" if is_match else "NEW 🆕"
+                
+            print(f"[{cam_id}] 💾 {status_log}: {person_id} "
                   f"(conf: {face.det_score:.2f}) → {person_folder}")
 
     except KeyboardInterrupt:

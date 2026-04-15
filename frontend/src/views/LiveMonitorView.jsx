@@ -1,6 +1,97 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MonitorPlay, AlertCircle, RefreshCw } from 'lucide-react';
-import { MEDIAMTX_URL, getImageUrl } from '../config';
+import { MonitorPlay, AlertCircle, RefreshCw, UserCheck, X } from 'lucide-react';
+import { MEDIAMTX_URL, BACKEND_URL, getImageUrl } from '../config';
+
+// ----------------------------------------------------
+// Target Watchlist Panel Component
+// ----------------------------------------------------
+const TargetWatchlistPanel = () => {
+    const [targetImage, setTargetImage] = useState(null);
+    const [isUploading, setIsUploading] = useState(false);
+    const fileInputRef = useRef(null);
+
+    const handleUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        setIsUploading(true);
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/target/set`, {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            if (res.ok) {
+                setTargetImage(BACKEND_URL + data.target_image);
+            } else {
+                alert("Error setting target: " + data.detail);
+            }
+        } catch (err) {
+            console.error(err);
+            alert("Upload failed.");
+        }
+        setIsUploading(false);
+    };
+
+    const handleClear = async () => {
+        try {
+            await fetch(`${BACKEND_URL}/api/target/clear`, { method: 'DELETE' });
+            setTargetImage(null);
+            if (fileInputRef.current) fileInputRef.current.value = "";
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    return (
+        <div className="mt-6 bg-white border border-slate-200 rounded-xl p-4 flex gap-6 items-center shadow-sm relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-2 h-full bg-red-500"></div>
+            <div className="flex-1 pl-4">
+                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <UserCheck className="w-5 h-5 text-red-500" />
+                    Live Priority Target
+                </h3>
+                <p className="text-sm text-slate-500 mt-1">Upload a face to instatiate real-time tracking across all WebRTC streams. Any match will trigger a global alarm.</p>
+                <div className="mt-4 flex gap-3">
+                    <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        ref={fileInputRef}
+                        onChange={handleUpload}
+                    />
+                    <button
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isUploading}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
+                    >
+                        {isUploading ? "Initializing AI..." : "Set Target Person"}
+                    </button>
+                    {targetImage && (
+                        <button
+                            onClick={handleClear}
+                            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-medium rounded-lg transition-colors border border-slate-200"
+                        >
+                            Clear Target
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            {/* Preview Area */}
+            <div className="w-28 h-28 bg-slate-50 rounded-lg border-2 border-dashed border-red-200 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
+                {targetImage ? (
+                    <img src={targetImage} alt="Target" className="w-full h-full object-cover" />
+                ) : (
+                    <span className="text-xs text-red-400 font-bold text-center px-2">WATCHLIST ACTIVE</span>
+                )}
+            </div>
+        </div>
+    );
+};
 
 // WebRTC Player Component
 const WebRTCPlayer = ({ camId, label, onError }) => {
@@ -101,6 +192,19 @@ const LiveMonitorView = ({ liveAlerts }) => {
     const [camStatus, setCamStatus] = useState({
         cam1: true, cam2: true, cam3: true, cam4: true
     });
+    const [targetPopup, setTargetPopup] = useState(null);
+
+    // Watch for TARGET_MATCH events
+    useEffect(() => {
+        if (liveAlerts.length > 0) {
+            const latest = liveAlerts[0];
+            if (latest.status === "TARGET_MATCH") {
+                setTargetPopup(latest);
+                // Optional: Auto dismiss popup after 10 seconds
+                // setTimeout(() => setTargetPopup(null), 10000);
+            }
+        }
+    }, [liveAlerts]);
 
     const handleStreamError = (camId) => {
         setCamStatus(prev => ({ ...prev, [camId]: false }));
@@ -143,6 +247,9 @@ const LiveMonitorView = ({ liveAlerts }) => {
                         </div>
                     ))}
                 </div>
+
+                {/* The new Target Panel goes right under the cameras */}
+                <TargetWatchlistPanel />
             </div>
 
             {/* REAL-TIME Activity Sidebar */}
@@ -168,11 +275,54 @@ const LiveMonitorView = ({ liveAlerts }) => {
                                 {alert.status === "MATCH" && (
                                     <AlertCircle className="w-4 h-4 text-amber-500" />
                                 )}
+                                {alert.status === "TARGET_MATCH" && (
+                                    <span className="bg-red-500 text-white text-[10px] font-bold px-2 py-1 rounded-full animate-pulse">TARGET</span>
+                                )}
                             </div>
                         ))
                     )}
                 </div>
             </div>
+
+            {/* HIGH-PRIORITY TARGET POPUP OVERLAY */}
+            {targetPopup && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl overflow-hidden max-w-lg w-full flex flex-col items-center animate-in zoom-in duration-300 slide-in-from-bottom-8">
+                        <div className="bg-red-600 w-full p-4 flex justify-between items-center relative">
+                            <div className="flex items-center gap-3">
+                                <AlertCircle className="text-white w-8 h-8 animate-pulse" />
+                                <h2 className="text-2xl font-black text-white tracking-widest uppercase">Target Detected</h2>
+                            </div>
+                            <button onClick={() => setTargetPopup(null)} className="text-red-200 hover:text-white transition-colors">
+                                <X className="w-6 h-6" />
+                            </button>
+                        </div>
+
+                        <div className="p-8 flex flex-col items-center text-center w-full">
+                            <div className="relative">
+                                <div className="absolute -inset-1 bg-red-500 rounded-full blur opacity-40 animate-pulse"></div>
+                                <img src={getImageUrl(targetPopup.image_path)} className="relative w-40 h-40 rounded-full object-cover border-4 border-red-500 shadow-xl" alt="Match" />
+                            </div>
+
+                            <h3 className="mt-6 text-xl font-bold text-slate-800">Match Confidence: {(targetPopup.confidence * 100).toFixed(1)}%</h3>
+                            <div className="mt-4 flex gap-4 w-full">
+                                <div className="flex-1 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                                    <p className="text-xs text-slate-500 font-bold uppercase mb-1">Location</p>
+                                    <p className="text-lg font-bold text-slate-800">{targetPopup.camera_id}</p>
+                                </div>
+                                <div className="flex-1 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                                    <p className="text-xs text-slate-500 font-bold uppercase mb-1">Time</p>
+                                    <p className="text-lg font-bold text-slate-800">{new Date(targetPopup.timestamp * 1000).toLocaleTimeString()}</p>
+                                </div>
+                            </div>
+
+                            <button onClick={() => setTargetPopup(null)} className="mt-8 w-full py-4 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition-all shadow-lg hover:shadow-red-500/25 active:scale-95">
+                                ACKNOWLEDGE & DISMISS
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
