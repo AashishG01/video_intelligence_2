@@ -1,6 +1,90 @@
-import React, { useState } from 'react';
-import { MonitorPlay, AlertCircle } from 'lucide-react';
-import { BACKEND_URL, getImageUrl } from '../config';
+import React, { useState, useEffect, useRef } from 'react';
+import { MonitorPlay, AlertCircle, RefreshCw } from 'lucide-react';
+import { MEDIAMTX_URL, getImageUrl } from '../config';
+
+// WebRTC Player Component
+const WebRTCPlayer = ({ camId, label, onError }) => {
+    const videoRef = useRef(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [retryCount, setRetryCount] = useState(0);
+
+    useEffect(() => {
+        let pc = null;
+        let isActive = true;
+
+        const startStream = async () => {
+            try {
+                console.log(`[WebRTC] Connecting to ${camId}...`);
+                pc = new RTCPeerConnection();
+
+                // Add a transceiver to receive video
+                pc.addTransceiver('video', { direction: 'recvonly' });
+
+                pc.ontrack = (event) => {
+                    if (isActive && videoRef.current) {
+                        videoRef.current.srcObject = event.streams[0];
+                        setIsPlaying(true);
+                    }
+                };
+
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                // Send offer to MediaMTX WebRTC endpoint
+                const response = await fetch(`${MEDIAMTX_URL}/${camId}/webrtc`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/sdp' },
+                    body: pc.localDescription.sdp,
+                });
+
+                if (!response.ok) {
+                    throw new Error('MediaMTX WebRTC API failed');
+                }
+
+                const answerSdp = await response.text();
+                await pc.setRemoteDescription(new RTCSessionDescription({
+                    type: 'answer',
+                    sdp: answerSdp
+                }));
+
+            } catch (err) {
+                console.error(`[WebRTC] Error streaming ${camId}:`, err);
+                if (isActive) {
+                    setIsPlaying(false);
+                    onError(camId);
+                    // Try to reconnect every 5 seconds if connection fails
+                    setTimeout(() => setRetryCount(rc => rc + 1), 5000);
+                }
+            }
+        };
+
+        startStream();
+
+        return () => {
+            isActive = false;
+            if (pc) pc.close();
+        };
+    }, [camId, retryCount, onError]);
+
+    return (
+        <div className="w-full aspect-video relative bg-slate-900 overflow-hidden">
+            <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className={`w-full h-full object-cover transition-opacity duration-500 ${isPlaying ? 'opacity-100' : 'opacity-0'}`}
+            />
+            {!isPlaying && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500">
+                    <RefreshCw className="w-8 h-8 animate-spin opacity-50 mb-2" />
+                    <p className="text-xs opacity-50 font-medium">Connecting WebRTC...</p>
+                </div>
+            )}
+        </div>
+    );
+};
+
 
 const LiveMonitorView = ({ liveAlerts }) => {
     const cameras = [
@@ -23,27 +107,28 @@ const LiveMonitorView = ({ liveAlerts }) => {
             <div className="flex-1 p-6 overflow-auto">
                 <div className="flex justify-between items-center mb-6">
                     <h2 className="text-2xl font-bold text-slate-800">Live Monitor</h2>
-                    <span className="flex items-center text-sm font-medium text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-200">
-                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse mr-2"></span>
-                        System Active
-                    </span>
+                    <div className="flex items-center gap-3">
+                        <span className="flex items-center text-sm font-medium text-blue-600 bg-blue-50 px-3 py-1 rounded-full border border-blue-200">
+                            <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse mr-2"></span>
+                            WebRTC Active
+                        </span>
+                        <span className="flex items-center text-sm font-medium text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-200">
+                            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse mr-2"></span>
+                            System Active
+                        </span>
+                    </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                     {cameras.map((cam) => (
-                        <div key={cam.id} className="bg-slate-800 rounded-xl overflow-hidden relative group">
+                        <div key={cam.id} className="bg-slate-800 rounded-xl overflow-hidden relative group shadow-sm border border-slate-700">
                             <div className="absolute top-3 left-3 z-10 text-white text-xs font-medium bg-black/60 px-3 py-1 rounded-md backdrop-blur-sm flex items-center">
                                 <span className={`w-2 h-2 rounded-full mr-2 ${camStatus[cam.id] ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}></span>
                                 {cam.label}
                             </div>
 
                             {camStatus[cam.id] ? (
-                                <img
-                                    src={`${BACKEND_URL}/api/stream/${cam.id}`}
-                                    alt={cam.label}
-                                    className="w-full aspect-video object-cover"
-                                    onError={() => handleStreamError(cam.id)}
-                                />
+                                <WebRTCPlayer camId={cam.id} label={cam.label} onError={handleStreamError} />
                             ) : (
                                 <div className="w-full aspect-video flex flex-col items-center justify-center text-slate-500 bg-slate-900">
                                     <MonitorPlay className="w-12 h-12 opacity-30 mb-2" />

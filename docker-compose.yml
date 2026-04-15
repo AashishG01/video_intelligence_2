@@ -59,3 +59,13 @@ services:
       POSTGRES_DB: surveillance
     ports:
       - "5432:5432"
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: core_mediamtx
+    ports:
+      - "8889:8889"   # WebRTC HTTP server
+      - "8554:8554"   # RTSP
+      - "8189:8189/udp" # WebRTC core
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml
