@@ -184,7 +184,7 @@ const LiveMonitorView = ({ liveAlerts }) => {
                 <WatchlistPanel onSearchStateChange={handleSearchStateChange} />
 
                 {/* Live Captures Feed */}
-                <div className="flex-1 flex flex-col border-t border-slate-200">
+                <div className="flex-1 flex flex-col min-h-0 border-t border-slate-200">
                     <div className="p-4 border-b border-slate-100 flex justify-between items-center">
                         <h3 className="font-semibold text-slate-800">Live Captures</h3>
                         <span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-full font-bold">{liveAlerts.length}</span>
