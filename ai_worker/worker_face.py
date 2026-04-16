@@ -36,9 +36,10 @@ pg_cursor = pg_conn.cursor()
 print("⏳ Connecting to Milvus Standalone...")
 milvus_client = MilvusClient(uri="http://localhost:19530")
 COLLECTION_NAME = "face_embeddings"
+WATCHLIST_COLLECTION = "watchlist_faces"
 
 # ─────────────────────────────────────────
-# 2. Ensure Milvus Collection Exists & Loaded
+# 2. Ensure Milvus Collections Exist & Loaded
 # ─────────────────────────────────────────
 def ensure_collection_loaded():
     if not milvus_client.has_collection(COLLECTION_NAME):
@@ -52,6 +53,16 @@ def ensure_collection_loaded():
         print(f"✅ Collection '{COLLECTION_NAME}' created.")
     milvus_client.load_collection(COLLECTION_NAME)
     print(f"✅ Collection '{COLLECTION_NAME}' loaded into memory.")
+
+    # Also load watchlist collection
+    try:
+        if milvus_client.has_collection(WATCHLIST_COLLECTION):
+            milvus_client.load_collection(WATCHLIST_COLLECTION)
+            print(f"✅ Collection '{WATCHLIST_COLLECTION}' loaded into memory.")
+        else:
+            print(f"⚠️  Watchlist collection not found. Skipping (run init_db.py).")
+    except Exception as wl_err:
+        print(f"⚠️  Watchlist load warning: {wl_err}")
 
 ensure_collection_loaded()
 
@@ -138,26 +149,52 @@ while True:
             
             face_crop = frame[y1:y2, x1:x2]
 
+            if face_crop.size == 0:
+                continue
             # ==========================================================
 
-            # ── LIVE TARGET MATCHING ──
-            is_target_match = False
+            # ── WATCHLIST MATCHING (Multi-Target) ──
+            is_watchlist_match = False
+            matched_watchlist_id = None
+            matched_suspect_name = None
             person_id = None
-            target_data = r.get("LIVE_TARGET_EMBEDDING")
-            
-            if target_data:
-                target_emb = np.array(json.loads(target_data))
-                A_np = face.embedding
-                cos_sim = np.dot(A_np, target_emb) / (np.linalg.norm(A_np) * np.linalg.norm(target_emb))
-                if cos_sim > MATCH_THRESHOLD:
-                    is_target_match = True
-                    target_id_val = r.get("LIVE_TARGET_ID")
-                    person_id = target_id_val.decode('utf-8') if target_id_val else "TARGET_VIP"
 
-            # ── Milvus similarity search ──
-            is_match  = False
+            active_raw = r.get("ACTIVE_WATCHLIST")
+            if active_raw:
+                try:
+                    active_ids = json.loads(active_raw.decode('utf-8') if isinstance(active_raw, bytes) else active_raw)
+                    if len(active_ids) > 0 and milvus_client.has_collection(WATCHLIST_COLLECTION):
+                        wl_results = milvus_client.search(
+                            collection_name=WATCHLIST_COLLECTION,
+                            data=[embedding],
+                            limit=1,
+                            output_fields=["watchlist_id"],
+                            search_params={"metric_type": "COSINE", "params": {"nprobe": 10}}
+                        )
+                        if wl_results and len(wl_results[0]) > 0:
+                            top_wl = wl_results[0][0]
+                            wl_dist = top_wl['distance']
+                            wl_id = top_wl['entity']['watchlist_id']
+                            # Only alert if this ID is in the active search list AND above threshold
+                            if wl_dist > MATCH_THRESHOLD and wl_id in active_ids:
+                                is_watchlist_match = True
+                                matched_watchlist_id = wl_id
+                                person_id = wl_id
+                                # Fetch suspect name from PostgreSQL
+                                try:
+                                    pg_cursor.execute("SELECT name FROM watchlist WHERE watchlist_id = %s", (wl_id,))
+                                    row = pg_cursor.fetchone()
+                                    matched_suspect_name = row[0] if row else wl_id
+                                except Exception:
+                                    matched_suspect_name = wl_id
+                                print(f"[{cam_id}] 🎯 WATCHLIST HIT: {matched_suspect_name} (sim: {wl_dist:.4f})")
+                except Exception as wl_err:
+                    print(f"⚠️  Watchlist search error: {wl_err}")
 
-            if not is_target_match:
+            # ── Milvus general similarity search (only if no watchlist match) ──
+            is_match = False
+
+            if not is_watchlist_match:
                 try:
                     search_res = milvus_client.search(
                         collection_name=COLLECTION_NAME,
@@ -166,16 +203,12 @@ while True:
                         output_fields=["person_id"],
                         search_params={"metric_type": "COSINE", "params": {"nprobe": 10}}
                     )
-
                     if search_res and len(search_res[0]) > 0:
-                        top   = search_res[0][0]
-                        dist  = top['distance']
-                        
-                        # NOTE: MATCH_THRESHOLD changed to 0.60 above for bulletproof DB
+                        top  = search_res[0][0]
+                        dist = top['distance']
                         if dist > MATCH_THRESHOLD:
                             person_id = top['entity']['person_id']
-                            is_match  = True
-                            
+                            is_match = True
                 except Exception as search_err:
                     print(f"⚠️  Milvus search error: {search_err}")
                     continue
@@ -183,62 +216,67 @@ while True:
             if not person_id:
                 person_id = f"P_{int(time.time() * 1000)}"
 
-            # ── GLOBAL dedup — not per-camera ──
-            cache_key = f"seen_global_{person_id}"
-            if r.exists(cache_key):
-                continue
+            # ── WATCHLIST_MATCH: Skip dedup so alarm ALWAYS fires ──
+            if not is_watchlist_match:
+                cache_key = f"seen_global_{person_id}"
+                if r.exists(cache_key):
+                    continue
 
             # ── Get or create person's subfolder ──
-            person_folder = get_person_folder(person_id)
+            person_folder = get_person_folder(str(person_id))
 
-            # ── Save Passport-style face crop into person's folder ──
+            # ── Save face crop ──
             filename  = f"{cam_id}_{int(timestamp)}.jpg"
             filepath  = os.path.join(person_folder, filename)
             cv2.imwrite(filepath, face_crop)
 
-            # ── Insert into Milvus + flush immediately ──
-            milvus_client.insert(
-                collection_name=COLLECTION_NAME,
-                data=[{"person_id": person_id, "embedding": embedding}]
-            )
-            milvus_client.flush(collection_name=COLLECTION_NAME)
-
-            # ── Insert sighting into PostgreSQL ──
             relative_path = f"/captured_faces/{person_id}/{filename}"
-            pg_cursor.execute(
-                "INSERT INTO sightings (person_id, camera_id, timestamp, image_path) "
-                "VALUES (%s, %s, %s, %s)",
-                (person_id, cam_id, timestamp, relative_path)
-            )
 
-            # ── Set global dedup cache ──
-            r.setex(cache_key, DEDUP_WINDOW_SEC, "1")
+            # ── For regular faces: Insert into DB. Watchlist matches skip DB pollution ──
+            if not is_watchlist_match:
+                milvus_client.insert(
+                    collection_name=COLLECTION_NAME,
+                    data=[{"person_id": person_id, "embedding": embedding}]
+                )
+                milvus_client.flush(collection_name=COLLECTION_NAME)
+
+                pg_cursor.execute(
+                    "INSERT INTO sightings (person_id, camera_id, timestamp, image_path) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (person_id, cam_id, timestamp, relative_path)
+                )
+                cache_key = f"seen_global_{person_id}"
+                r.setex(cache_key, DEDUP_WINDOW_SEC, "1")
 
             # ── Publish real-time alert to dashboard ──
             r_pub = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
-            
-            # Determine WebSocket status tag
+
             ws_status = "NEW"
-            if is_target_match:
-                ws_status = "TARGET_MATCH"
+            if is_watchlist_match:
+                ws_status = "WATCHLIST_MATCH"
             elif is_match:
                 ws_status = "MATCH"
-                
-            r_pub.publish("live_face_alerts", json.dumps({
-                "person_id":  person_id,
+
+            alert_payload = {
+                "person_id":  str(person_id),
                 "camera_id":  cam_id,
                 "timestamp":  timestamp,
                 "image_path": relative_path,
                 "confidence": round(float(face.det_score), 3),
                 "status":     ws_status
-            }))
+            }
+            if is_watchlist_match:
+                alert_payload["suspect_name"] = matched_suspect_name
+                alert_payload["watchlist_id"] = matched_watchlist_id
+
+            r_pub.publish("live_face_alerts", json.dumps(alert_payload))
             r_pub.close()
 
-            if is_target_match:
-                status_log = "🚨 TARGET FOUND"
+            if is_watchlist_match:
+                status_log = f"🚨 WATCHLIST: {matched_suspect_name}"
             else:
                 status_log = "MATCH ✅" if is_match else "NEW 🆕"
-                
+
             print(f"[{cam_id}] 💾 {status_log}: {person_id} "
                   f"(conf: {face.det_score:.2f}) → {person_folder}")
 

@@ -141,48 +141,134 @@ async def get_system_stats():
     }
 
 # ==========================================
-# 7. LIVE TARGET MANAGEMENT
+# 7. WATCHLIST MANAGEMENT (Enrollment + Activation)
 # ==========================================
-@app.post("/api/target/set")
-async def set_live_target(file: UploadFile = File(...)):
-    """Sets the given image as the active live target in Redis for instant worker matching."""
+WATCHLIST_COLLECTION = "watchlist_faces"
+
+# Save watchlist images in a subfolder
+WATCHLIST_FOLDER = os.path.join(SAVE_FOLDER, "watchlist")
+os.makedirs(WATCHLIST_FOLDER, exist_ok=True)
+
+@app.post("/api/watchlist/add")
+async def add_to_watchlist(
+    file: UploadFile = File(...),
+    name: str = Query("Unknown Suspect", description="Name of the suspect"),
+    threat_level: str = Query("MEDIUM", description="Threat level: LOW, MEDIUM, HIGH, CRITICAL")
+):
+    """Enrolls a new suspect into the Watchlist (Milvus + PostgreSQL)."""
     contents = await file.read()
     nparr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
     faces = face_app.get(img)
     if not faces:
-        raise HTTPException(status_code=400, detail="No face detected in target image.")
+        raise HTTPException(status_code=400, detail="No face detected in uploaded image.")
 
-    # Sort faces by bounding box area to get the largest prominent face
+    # Pick the largest face
     faces = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]), reverse=True)
-    target_embedding = faces[0].embedding.tolist()
+    suspect_embedding = faces[0].embedding.tolist()
 
-    target_id = f"TARGET_{int(time.time())}"
-    filename = f"{target_id}.jpg"
-    
-    # Save directly to images folder for UI rendering
-    filepath = os.path.join(SAVE_FOLDER, filename)
+    watchlist_id = f"WL_{int(time.time() * 1000)}"
+    filename = f"{watchlist_id}.jpg"
+    filepath = os.path.join(WATCHLIST_FOLDER, filename)
     cv2.imwrite(filepath, img)
 
-    # Register in Redis for the Python Worker `worker_face.py` to instantly check
-    r.set("LIVE_TARGET_EMBEDDING", json.dumps(target_embedding))
-    r.set("LIVE_TARGET_IMAGE", f"/images/{filename}")
-    r.set("LIVE_TARGET_ID", target_id)
+    # Insert embedding into Milvus watchlist collection
+    try:
+        milvus_client.load_collection(WATCHLIST_COLLECTION)
+    except Exception:
+        pass
+    milvus_client.insert(
+        collection_name=WATCHLIST_COLLECTION,
+        data=[{"watchlist_id": watchlist_id, "embedding": suspect_embedding}]
+    )
+    milvus_client.flush(collection_name=WATCHLIST_COLLECTION)
+
+    # Insert metadata into PostgreSQL
+    conn = get_pg_connection()
+    cursor = conn.cursor()
+    image_path = f"/images/watchlist/{filename}"
+    cursor.execute(
+        "INSERT INTO watchlist (watchlist_id, name, threat_level, image_path) VALUES (%s, %s, %s, %s)",
+        (watchlist_id, name, threat_level, image_path)
+    )
+    cursor.close()
+    conn.close()
 
     return {
-        "status": "Target Set", 
-        "target_id": target_id,
-        "target_image": f"/images/{filename}"
+        "status": "Suspect Enrolled",
+        "watchlist_id": watchlist_id,
+        "name": name,
+        "threat_level": threat_level,
+        "image_url": image_path
     }
 
-@app.delete("/api/target/clear")
-async def clear_live_target():
-    """Removes the active live target."""
-    r.delete("LIVE_TARGET_EMBEDDING")
-    r.delete("LIVE_TARGET_IMAGE")
-    r.delete("LIVE_TARGET_ID")
-    return {"status": "Target Cleared"}
+@app.get("/api/watchlist/list")
+async def list_watchlist():
+    """Returns all enrolled suspects from the Watchlist."""
+    conn = get_pg_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT watchlist_id, name, threat_level, image_path, created_at FROM watchlist ORDER BY created_at DESC")
+    records = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    suspects = []
+    for rec in records:
+        suspects.append({
+            "watchlist_id": rec["watchlist_id"],
+            "name": rec["name"],
+            "threat_level": rec["threat_level"],
+            "image_url": rec["image_path"],
+            "created_at": str(rec["created_at"])
+        })
+
+    return {"total": len(suspects), "suspects": suspects}
+
+@app.delete("/api/watchlist/remove/{watchlist_id}")
+async def remove_from_watchlist(watchlist_id: str):
+    """Removes a suspect from both Milvus and PostgreSQL."""
+    # Remove from PostgreSQL
+    conn = get_pg_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM watchlist WHERE watchlist_id = %s", (watchlist_id,))
+    cursor.close()
+    conn.close()
+
+    # Remove from Milvus
+    try:
+        milvus_client.load_collection(WATCHLIST_COLLECTION)
+        milvus_client.delete(
+            collection_name=WATCHLIST_COLLECTION,
+            filter=f'watchlist_id == "{watchlist_id}"'
+        )
+    except Exception as e:
+        print(f"⚠️ Milvus delete warning: {e}")
+
+    # Deactivate if this ID was in the active list
+    active_raw = r.get("ACTIVE_WATCHLIST")
+    if active_raw:
+        try:
+            active_ids = json.loads(active_raw)
+            if watchlist_id in active_ids:
+                active_ids.remove(watchlist_id)
+                r.set("ACTIVE_WATCHLIST", json.dumps(active_ids))
+        except Exception:
+            pass
+
+    return {"status": "Suspect Removed", "watchlist_id": watchlist_id}
+
+@app.post("/api/watchlist/activate")
+async def activate_watchlist_search(ids: list[str]):
+    """Writes the selected suspect IDs to Redis for the AI Worker to scan against."""
+    r.set("ACTIVE_WATCHLIST", json.dumps(ids))
+    return {"status": "Search Activated", "active_targets": ids, "count": len(ids)}
+
+@app.delete("/api/watchlist/deactivate")
+async def deactivate_watchlist_search():
+    """Clears the active search."""
+    r.delete("ACTIVE_WATCHLIST")
+    return {"status": "Search Deactivated"}
 
 # ==========================================
 # 8. SEARCH BY IMAGE
