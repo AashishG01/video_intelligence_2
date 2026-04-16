@@ -34,7 +34,6 @@ try:
             id SERIAL PRIMARY KEY,
             watchlist_id VARCHAR(100) UNIQUE NOT NULL,
             name VARCHAR(200) NOT NULL,
-            threat_level VARCHAR(50) DEFAULT 'UNKNOWN',
             image_path TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );

@@ -140,6 +140,76 @@ async def get_system_stats():
         "system_start_time": start_time_str
     }
 
+@app.on_event("startup")
+def startup_db_check():
+    """Ensures that PostgreSQL tables and Milvus collections exist on startup."""
+    print("⏳ Running Auto-Database Check...")
+    
+    # 1. PostgreSQL Check
+    try:
+        conn = get_pg_connection()
+        conn.autocommit = True
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sightings (
+                id SERIAL PRIMARY KEY,
+                person_id VARCHAR(100) NOT NULL,
+                camera_id VARCHAR(50) NOT NULL,
+                timestamp FLOAT NOT NULL,
+                image_path TEXT NOT NULL
+            );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON sightings(timestamp);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_person_id ON sightings(person_id);")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS watchlist (
+                id SERIAL PRIMARY KEY,
+                watchlist_id VARCHAR(100) UNIQUE NOT NULL,
+                name VARCHAR(200) NOT NULL,
+                image_path TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_id ON watchlist(watchlist_id);")
+        
+        cursor.close()
+        conn.close()
+        print("✅ PostgreSQL Tables Verified.")
+    except Exception as e:
+        print(f"⚠️ Warning: Auto-DB PostgreSQL Init failed: {e}")
+
+    # 2. Milvus Check
+    try:
+        from pymilvus import DataType
+        if not milvus_client.has_collection(COLLECTION_NAME):
+            schema = milvus_client.create_schema(auto_id=True, enable_dynamic_field=False)
+            schema.add_field(field_name="id", datatype=DataType.INT64, is_primary=True)
+            schema.add_field(field_name="person_id", datatype=DataType.VARCHAR, max_length=100)
+            schema.add_field(field_name="embedding", datatype=DataType.FLOAT_VECTOR, dim=512)
+            milvus_client.create_collection(collection_name=COLLECTION_NAME, schema=schema)
+            
+            index_params = milvus_client.prepare_index_params()
+            index_params.add_index(field_name="embedding", metric_type="COSINE", index_type="IVF_FLAT", params={"nlist": 128})
+            milvus_client.create_index(collection_name=COLLECTION_NAME, index_params=index_params)
+            print(f"✅ Created missing Milvus collection: {COLLECTION_NAME}")
+
+        WATCHLIST_COLLECTION = "watchlist_faces"
+        if not milvus_client.has_collection(WATCHLIST_COLLECTION):
+            wl_schema = milvus_client.create_schema(auto_id=True, enable_dynamic_field=False)
+            wl_schema.add_field(field_name="id", datatype=DataType.INT64, is_primary=True)
+            wl_schema.add_field(field_name="watchlist_id", datatype=DataType.VARCHAR, max_length=100)
+            wl_schema.add_field(field_name="embedding", datatype=DataType.FLOAT_VECTOR, dim=512)
+            milvus_client.create_collection(collection_name=WATCHLIST_COLLECTION, schema=wl_schema)
+            
+            wl_index = milvus_client.prepare_index_params()
+            wl_index.add_index(field_name="embedding", metric_type="COSINE", index_type="IVF_FLAT", params={"nlist": 128})
+            milvus_client.create_index(collection_name=WATCHLIST_COLLECTION, index_params=wl_index)
+            print(f"✅ Created missing Milvus collection: {WATCHLIST_COLLECTION}")
+    except Exception as e:
+         print(f"⚠️ Warning: Auto-DB Milvus Init failed: {e}")
+
 # ==========================================
 # 7. WATCHLIST MANAGEMENT (Enrollment + Activation)
 # ==========================================
@@ -152,8 +222,7 @@ os.makedirs(WATCHLIST_FOLDER, exist_ok=True)
 @app.post("/api/watchlist/add")
 async def add_to_watchlist(
     file: UploadFile = File(...),
-    name: str = Query("Unknown Suspect", description="Name of the suspect"),
-    threat_level: str = Query("MEDIUM", description="Threat level: LOW, MEDIUM, HIGH, CRITICAL")
+    name: str = Query("Unknown Suspect", description="Name of the suspect")
 ):
     """Enrolls a new suspect into the Watchlist (Milvus + PostgreSQL)."""
     contents = await file.read()
@@ -189,8 +258,8 @@ async def add_to_watchlist(
     cursor = conn.cursor()
     image_path = f"/images/watchlist/{filename}"
     cursor.execute(
-        "INSERT INTO watchlist (watchlist_id, name, threat_level, image_path) VALUES (%s, %s, %s, %s)",
-        (watchlist_id, name, threat_level, image_path)
+        "INSERT INTO watchlist (watchlist_id, name, image_path) VALUES (%s, %s, %s)",
+        (watchlist_id, name, image_path)
     )
     cursor.close()
     conn.close()
@@ -199,7 +268,6 @@ async def add_to_watchlist(
         "status": "Suspect Enrolled",
         "watchlist_id": watchlist_id,
         "name": name,
-        "threat_level": threat_level,
         "image_url": image_path
     }
 
@@ -208,7 +276,7 @@ async def list_watchlist():
     """Returns all enrolled suspects from the Watchlist."""
     conn = get_pg_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT watchlist_id, name, threat_level, image_path, created_at FROM watchlist ORDER BY created_at DESC")
+    cursor.execute("SELECT watchlist_id, name, image_path, created_at FROM watchlist ORDER BY created_at DESC")
     records = cursor.fetchall()
     cursor.close()
     conn.close()
@@ -218,7 +286,6 @@ async def list_watchlist():
         suspects.append({
             "watchlist_id": rec["watchlist_id"],
             "name": rec["name"],
-            "threat_level": rec["threat_level"],
             "image_url": rec["image_path"],
             "created_at": str(rec["created_at"])
         })

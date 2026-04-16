@@ -2,21 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { UserPlus, Search, X, Shield, ShieldAlert, ShieldCheck, Trash2, Loader2 } from 'lucide-react';
 import { BACKEND_URL } from '../config';
 
-const THREAT_COLORS = {
-    LOW: { bg: 'bg-green-500/20', border: 'border-green-500', text: 'text-green-400', ring: 'ring-green-500/30' },
-    MEDIUM: { bg: 'bg-amber-500/20', border: 'border-amber-500', text: 'text-amber-400', ring: 'ring-amber-500/30' },
-    HIGH: { bg: 'bg-orange-500/20', border: 'border-orange-500', text: 'text-orange-400', ring: 'ring-orange-500/30' },
-    CRITICAL: { bg: 'bg-red-500/20', border: 'border-red-500', text: 'text-red-400', ring: 'ring-red-500/40' },
-    UNKNOWN: { bg: 'bg-slate-500/20', border: 'border-slate-500', text: 'text-slate-400', ring: 'ring-slate-500/30' },
-};
-
 const WatchlistPanel = ({ onSearchStateChange }) => {
     const [suspects, setSuspects] = useState([]);
     const [selectedIds, setSelectedIds] = useState([]);
     const [isSearching, setIsSearching] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadName, setUploadName] = useState('');
-    const [uploadThreat, setUploadThreat] = useState('MEDIUM');
     const [showUploadForm, setShowUploadForm] = useState(false);
     const fileInputRef = useRef(null);
 
@@ -44,7 +35,7 @@ const WatchlistPanel = ({ onSearchStateChange }) => {
         formData.append("file", file);
 
         const name = uploadName.trim() || "Unknown Suspect";
-        const url = `${BACKEND_URL}/api/watchlist/add?name=${encodeURIComponent(name)}&threat_level=${uploadThreat}`;
+        const url = `${BACKEND_URL}/api/watchlist/add?name=${encodeURIComponent(name)}`;
 
         try {
             const res = await fetch(url, { method: 'POST', body: formData });
@@ -131,16 +122,6 @@ const WatchlistPanel = ({ onSearchStateChange }) => {
                         onChange={(e) => setUploadName(e.target.value)}
                         className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500/30 bg-white"
                     />
-                    <select
-                        value={uploadThreat}
-                        onChange={(e) => setUploadThreat(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500/30 bg-white"
-                    >
-                        <option value="LOW">🟢 Low Threat</option>
-                        <option value="MEDIUM">🟡 Medium Threat</option>
-                        <option value="HIGH">🟠 High Threat</option>
-                        <option value="CRITICAL">🔴 Critical Threat</option>
-                    </select>
                     <input type="file" accept="image/*" ref={fileInputRef} onChange={handleUpload} className="hidden" />
                     <button
                         onClick={() => fileInputRef.current?.click()}
@@ -160,14 +141,13 @@ const WatchlistPanel = ({ onSearchStateChange }) => {
                     <div className="grid grid-cols-2 gap-2">
                         {suspects.map((s) => {
                             const isSelected = selectedIds.includes(s.watchlist_id);
-                            const colors = THREAT_COLORS[s.threat_level] || THREAT_COLORS.UNKNOWN;
                             return (
                                 <div
                                     key={s.watchlist_id}
                                     onClick={() => toggleSelection(s.watchlist_id)}
                                     className={`relative cursor-pointer rounded-lg overflow-hidden border-2 transition-all duration-200 group ${isSelected
-                                            ? `${colors.border} scale-[1.02] shadow-lg ring-4 ${colors.ring}`
-                                            : 'border-transparent opacity-70 hover:opacity-100 hover:border-slate-200'
+                                        ? `border-red-500 scale-[1.02] shadow-lg ring-4 ring-red-500/40`
+                                        : 'border-transparent opacity-70 hover:opacity-100 hover:border-slate-200'
                                         }`}
                                 >
                                     <img
@@ -190,7 +170,6 @@ const WatchlistPanel = ({ onSearchStateChange }) => {
                                     </button>
                                     <div className="bg-slate-900 text-center py-1 px-1">
                                         <p className="text-[10px] text-white font-medium truncate">{s.name}</p>
-                                        <span className={`text-[9px] font-bold ${colors.text}`}>{s.threat_level}</span>
                                     </div>
                                 </div>
                             );
@@ -207,8 +186,8 @@ const WatchlistPanel = ({ onSearchStateChange }) => {
                             onClick={startSearch}
                             disabled={selectedIds.length === 0}
                             className={`w-full py-2.5 text-sm font-bold rounded-lg transition-all flex items-center justify-center gap-2 ${selectedIds.length > 0
-                                    ? 'bg-red-600 hover:bg-red-700 text-white shadow-md hover:shadow-red-500/25 active:scale-[0.98]'
-                                    : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                ? 'bg-red-600 hover:bg-red-700 text-white shadow-md hover:shadow-red-500/25 active:scale-[0.98]'
+                                : 'bg-slate-100 text-slate-400 cursor-not-allowed'
                                 }`}
                         >
                             <Search className="w-4 h-4" />
