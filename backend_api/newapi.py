@@ -261,6 +261,7 @@ async def add_to_watchlist(
         "INSERT INTO watchlist (watchlist_id, name, image_path) VALUES (%s, %s, %s)",
         (watchlist_id, name, image_path)
     )
+    conn.commit()
     cursor.close()
     conn.close()
 
@@ -299,6 +300,7 @@ async def remove_from_watchlist(watchlist_id: str):
     conn = get_pg_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM watchlist WHERE watchlist_id = %s", (watchlist_id,))
+    conn.commit()
     cursor.close()
     conn.close()
 
