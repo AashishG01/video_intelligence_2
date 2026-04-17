@@ -9,12 +9,15 @@ import json
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from pymilvus import MilvusClient
-from fastapi import FastAPI, UploadFile, File, Query, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, Query, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
 from insightface.app import FaceAnalysis
 from datetime import datetime
+from pydantic import BaseModel
+from fastapi.security import OAuth2PasswordRequestForm
+from auth import verify_password, get_password_hash, create_access_token, get_current_user, require_admin
 
 # ==========================================
 # 1. SYSTEM SETUP
@@ -60,6 +63,60 @@ face_app = FaceAnalysis(name='antelopev2', providers=['CUDAExecutionProvider', '
 face_app.prepare(ctx_id=0, det_thresh=0.10, det_size=(640, 640))
 # face_app.prepare(ctx_id=0, det_thresh=0.45, det_size=(1024, 1024))
 print("✅ API Router Online.")
+
+
+# ==========================================
+# AUTHENTICATION & RBAC ROUTES
+# ==========================================
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: str
+
+@app.post("/api/auth/login")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    conn = get_pg_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT * FROM users WHERE username = %s", (form_data.username,))
+    user_record = cursor.fetchone()
+    cursor.close()
+    conn.close()
+
+    if not user_record or not verify_password(form_data.password, user_record['hashed_password']):
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
+
+    access_token = create_access_token(data={"sub": user_record['username'], "role": user_record['role']})
+    
+    return {
+        "access_token": access_token, 
+        "token_type": "bearer",
+        "role": user_record['role']
+    }
+
+@app.post("/api/auth/register_operator")
+async def create_operator(
+    user_data: UserCreate, 
+    admin_user: dict = Depends(require_admin) # 🛑 BOUNCER: Only Admins can hit this!
+):
+    if user_data.role not in ['admin', 'user']:
+        raise HTTPException(status_code=400, detail="Invalid role. Must be 'admin' or 'user'.")
+    
+    hashed_pw = get_password_hash(user_data.password)
+    
+    try:
+        conn = get_pg_connection()
+        conn.autocommit = True
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO users (username, hashed_password, role) VALUES (%s, %s, %s)", 
+            (user_data.username, hashed_pw, user_data.role)
+        )
+        cursor.close()
+        conn.close()
+    except psycopg2.IntegrityError:
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    return {"message": f"Operator '{user_data.username}' successfully created."}
 
 # ==========================================
 # 4. WEBSOCKET FOR REAL-TIME ALERTS
@@ -222,7 +279,8 @@ os.makedirs(WATCHLIST_FOLDER, exist_ok=True)
 @app.post("/api/watchlist/add")
 async def add_to_watchlist(
     file: UploadFile = File(...),
-    name: str = Query("Unknown Suspect", description="Name of the suspect")
+    name: str = Query("Unknown Suspect", description="Name of the suspect"),
+    admin_user: dict = Depends(require_admin) # <-- ADD THIS LINE
 ):
     """Enrolls a new suspect into the Watchlist (Milvus + PostgreSQL)."""
     contents = await file.read()
@@ -294,7 +352,10 @@ async def list_watchlist():
     return {"total": len(suspects), "suspects": suspects}
 
 @app.delete("/api/watchlist/remove/{watchlist_id}")
-async def remove_from_watchlist(watchlist_id: str):
+async def remove_from_watchlist(
+    watchlist_id: str,
+    admin_user: dict = Depends(require_admin) # <-- ADD THIS LINE
+):
     """Removes a suspect from both Milvus and PostgreSQL."""
     # Remove from PostgreSQL
     conn = get_pg_connection()

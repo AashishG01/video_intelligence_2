@@ -39,10 +39,22 @@ try:
         );
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_id ON watchlist(watchlist_id);")
+
+    # ── User Authentication Table (RBAC) ──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(50) UNIQUE NOT NULL,
+            hashed_password VARCHAR(255) NOT NULL,
+            role VARCHAR(20) NOT NULL CHECK (role IN ('admin', 'user')),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    print("✅ PostgreSQL 'users' table ready.")
     
     cursor.close()
     conn.close()
-    print("✅ PostgreSQL 'sightings' + 'watchlist' tables ready.")
+    print("✅ PostgreSQL databases initialized successfully.")
 except Exception as e:
     print(f"❌ Postgres Init Error: {e}")
 
