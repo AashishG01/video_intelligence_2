@@ -18,6 +18,9 @@ from datetime import datetime
 from pydantic import BaseModel
 from fastapi.security import OAuth2PasswordRequestForm
 from auth import verify_password, get_password_hash, create_access_token, get_current_user, require_admin
+from pydantic import BaseModel as PydanticBaseModel
+from typing import List, Optional # Add this to your imports
+from fastapi import FastAPI, UploadFile, File, Query, HTTPException, WebSocket, Form, Depends
 
 # ==========================================
 # 1. SYSTEM SETUP
@@ -513,6 +516,211 @@ async def get_person_timeline(person_id: str):
         "locations": list(locations),
         "timeline": timeline
     }
+
+
+# ==========================================
+# SUBJECTS & WATCHLIST CATEGORY ENDPOINTS
+# ==========================================
+
+@app.get("/api/watchlist/categories")
+async def get_categories(current_user: dict = Depends(get_current_user)):
+    conn = get_pg_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT id, name, color_code, description FROM watchlist_categories ORDER BY id")
+    cats = cursor.fetchall()
+    cursor.close(); conn.close()
+    return cats
+
+
+@app.get("/api/subjects/list")
+async def list_subjects(current_user: dict = Depends(get_current_user)):
+    conn = get_pg_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("""
+        SELECT s.id, s.subject_uuid, s.full_name, s.age, s.gender,
+               s.occupation, s.physical_description as description,
+               s.risk_level, s.created_at,
+               -- Aggregate categories into a JSON array for the frontend
+               json_agg(json_build_object('name', c.name, 'color', c.color_code)) as categories,
+               '/images/watchlist/' || s.subject_uuid || '.jpg' as image_url
+        FROM subjects s
+        JOIN watchlist_members wm ON s.id = wm.subject_id
+        JOIN watchlist_categories c ON wm.category_id = c.id
+        WHERE wm.is_active = TRUE
+        GROUP BY s.id
+        ORDER BY s.created_at DESC
+    """)
+    rows = cursor.fetchall()
+    cursor.close(); conn.close()
+    return rows
+
+
+@app.post("/api/subjects/enroll")
+async def enroll_subject(
+    full_name: str = Form(...),          # Changed Query to Form
+    age: int = Form(None),               # Changed Query to Form
+    gender: str = Form("Unknown"),       # Changed Query to Form
+    occupation: str = Form(None),        # Changed Query to Form
+    category_ids: List[int] = Form(...), # Changed Query to Form
+    risk_level: str = Form("Low"),       # Changed Query to Form
+    description: str = Form(None),       # Changed Query to Form
+    notes: str = Form(None),             # Changed Query to Form
+    file: UploadFile = File(...),
+    admin_user: dict = Depends(require_admin)
+):
+    # 1. AI Vectorization
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    faces = face_app.get(img)
+    if not faces:
+        raise HTTPException(status_code=400, detail="No face detected in the uploaded image.")
+
+    # Pick the largest detected face
+    faces = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]), reverse=True)
+    embedding = faces[0].embedding.tolist()
+
+    subject_uuid = f"SUB_{int(time.time() * 1000)}"
+
+    # 2. Save image to disk
+    filename = f"{subject_uuid}.jpg"
+    filepath = os.path.join(WATCHLIST_FOLDER, filename)
+    cv2.imwrite(filepath, img)
+
+    # 3. Insert vector into Milvus
+    try:
+        milvus_client.load_collection(WATCHLIST_COLLECTION)
+    except Exception:
+        pass
+    milvus_client.insert(
+        collection_name=WATCHLIST_COLLECTION,
+        data=[{"watchlist_id": subject_uuid, "embedding": embedding}]
+    )
+    milvus_client.flush(collection_name=WATCHLIST_COLLECTION)
+
+    # 4. Insert into PostgreSQL
+    conn = get_pg_connection()
+    cursor = conn.cursor()
+    try:
+        # Insert Subject Master Record (Once)
+        cursor.execute("""
+            INSERT INTO subjects (subject_uuid, full_name, age, gender, occupation, physical_description, risk_level)
+            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
+        """, (subject_uuid, full_name, age, gender, occupation, description, risk_level))
+        new_id = cursor.fetchone()[0]
+
+        # NEW: Loop through every category ID provided and link them
+        for cat_id in category_ids:
+            cursor.execute("""
+                INSERT INTO watchlist_members (subject_id, category_id, added_by, notes)
+                VALUES (%s, %s, %s, %s)
+            """, (new_id, cat_id, admin_user['username'], notes))
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close(); conn.close()
+
+    return {"status": "Subject Enrolled in Multiple Lists", "uuid": subject_uuid}
+
+
+@app.delete("/api/subjects/remove/{subject_uuid}")
+async def remove_subject(subject_uuid: str, admin_user: dict = Depends(require_admin)):
+    # Remove from Milvus
+    try:
+        milvus_client.load_collection(WATCHLIST_COLLECTION)
+        milvus_client.delete(
+            collection_name=WATCHLIST_COLLECTION,
+            filter=f'watchlist_id == "{subject_uuid}"'
+        )
+    except Exception as e:
+        print(f"Milvus delete warning: {e}")
+
+    # Remove from PostgreSQL (cascade handles watchlist_members)
+    conn = get_pg_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM subjects WHERE subject_uuid = %s", (subject_uuid,))
+    conn.commit()
+    cursor.close(); conn.close()
+
+    # Remove image from disk
+    img_path = os.path.join(WATCHLIST_FOLDER, f"{subject_uuid}.jpg")
+    if os.path.exists(img_path):
+        os.remove(img_path)
+
+    return {"status": "Subject Removed", "uuid": subject_uuid}
+
+@app.put("/api/subjects/update/{subject_uuid}")
+async def update_subject(
+    subject_uuid: str,
+    full_name: str = Form(...),
+    age: int = Form(None),
+    gender: str = Form("Unknown"),
+    occupation: str = Form(None),
+    category_ids: List[int] = Form(...),
+    risk_level: str = Form("Low"),
+    description: str = Form(None),
+    notes: str = Form(None),
+    file: Optional[UploadFile] = File(None), # Notice this is optional now!
+    admin_user: dict = Depends(require_admin)
+):
+    conn = get_pg_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # 1. Update PostgreSQL Identity Data
+        cursor.execute("""
+            UPDATE subjects 
+            SET full_name=%s, age=%s, gender=%s, occupation=%s, physical_description=%s, risk_level=%s
+            WHERE subject_uuid=%s RETURNING id
+        """, (full_name, age, gender, occupation, description, risk_level, subject_uuid))
+        
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Subject not found")
+        subject_id = row[0]
+
+        # 2. Update Watchlist Categories (Delete old, Insert new)
+        cursor.execute("DELETE FROM watchlist_members WHERE subject_id = %s", (subject_id,))
+        for cat_id in category_ids:
+            cursor.execute("""
+                INSERT INTO watchlist_members (subject_id, category_id, added_by, notes)
+                VALUES (%s, %s, %s, %s)
+            """, (subject_id, cat_id, admin_user['username'], notes))
+
+        # 3. Process New Image (Only if uploaded)
+        if file:
+            contents = await file.read()
+            nparr = np.frombuffer(contents, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            faces = face_app.get(img)
+            
+            if not faces:
+                raise HTTPException(status_code=400, detail="No face detected in new image.")
+            
+            # Save new image (overwrites old one)
+            filepath = os.path.join(WATCHLIST_FOLDER, f"{subject_uuid}.jpg")
+            cv2.imwrite(filepath, img)
+
+            # Update Milvus (Delete old vector, Insert new)
+            faces = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]), reverse=True)
+            embedding = faces[0].embedding.tolist()
+            
+            milvus_client.load_collection(WATCHLIST_COLLECTION)
+            milvus_client.delete(collection_name=WATCHLIST_COLLECTION, filter=f'watchlist_id == "{subject_uuid}"')
+            milvus_client.insert(collection_name=WATCHLIST_COLLECTION, data=[{"watchlist_id": subject_uuid, "embedding": embedding}])
+            milvus_client.flush(collection_name=WATCHLIST_COLLECTION)
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close(); conn.close()
+
+    return {"status": "Subject Updated Successfully", "uuid": subject_uuid}
 
 # ==========================================
 # RUN
