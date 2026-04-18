@@ -38,10 +38,20 @@ app.add_middleware(
 )
 
 # ⚠️ IMPORTANT: Folder Mounting for Images
-# Agar tumhara API aur 'captured_faces' folder same jagah hain toh "captured_faces" likho.
-# Agar folder ek step piche hai toh "../4_backend_api/captured_faces" likho.
 SAVE_FOLDER = "captured_faces" 
 os.makedirs(SAVE_FOLDER, exist_ok=True)
+
+# 1. Mount the main Watchlist folder (from our earlier steps)
+WATCHLIST_FOLDER = os.path.join(SAVE_FOLDER, "watchlist")
+os.makedirs(WATCHLIST_FOLDER, exist_ok=True)
+app.mount("/images/watchlist", StaticFiles(directory=WATCHLIST_FOLDER), name="watchlist_images")
+
+# 2. Mount the new Sightings folder (for live camera captures)
+SIGHTINGS_FOLDER = os.path.join(SAVE_FOLDER, "sightings")
+os.makedirs(SIGHTINGS_FOLDER, exist_ok=True)
+app.mount("/images/sightings", StaticFiles(directory=SIGHTINGS_FOLDER), name="sightings_images")
+
+# 3. Mount the general images folder (Keep this last as a fallback)
 app.mount("/images", StaticFiles(directory=SAVE_FOLDER), name="images")
 
 # ==========================================
