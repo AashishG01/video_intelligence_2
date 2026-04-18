@@ -269,28 +269,13 @@ while True:
                 alert_payload["suspect_name"] = matched_suspect_name
                 alert_payload["watchlist_id"] = matched_watchlist_id
 
-            # ==========================================
-            # 🚨 THE TACTICAL KILL SWITCH (ALERTS ONLY) 🚨
-            # ==========================================
-            system_status = r.get("system_armed")
-            
-            # Default to Armed ("1") if the key doesn't exist
-            if system_status is None or system_status.decode('utf-8') == "1":
-                # System is Armed: Broadcast to the React UI
-                r_pub.publish("live_face_alerts", json.dumps(alert_payload))
-                
-                if is_watchlist_match:
-                    status_log = f"🚨 WATCHLIST ALARM: {matched_suspect_name}"
-                else:
-                    status_log = "MATCH ✅" if is_match else "NEW 🆕"
-            else:
-                # System is Disarmed: Keep React UI quiet
-                if is_watchlist_match:
-                    status_log = f"🔕 SILENT WATCHLIST: {matched_suspect_name} (UI Disarmed)"
-                else:
-                    status_log = "🔕 SILENT MATCH ✅" if is_match else "🔕 SILENT NEW 🆕"
-
+            r_pub.publish("live_face_alerts", json.dumps(alert_payload))
             r_pub.close()
+
+            if is_watchlist_match:
+                status_log = f"🚨 WATCHLIST: {matched_suspect_name}"
+            else:
+                status_log = "MATCH ✅" if is_match else "NEW 🆕"
 
             print(f"[{cam_id}] 💾 {status_log}: {person_id} "
                   f"(conf: {face.det_score:.2f}) → {person_folder}")

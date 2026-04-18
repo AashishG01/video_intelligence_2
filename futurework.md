@@ -3,8 +3,8 @@ We have to create an end to end application based on the webserver server based
 
 -> creating a new database for storing human data -> done
 -> feature: creating a page which can add subject(human) add details to him -> done
--> creating a database for watchlist 
--> adding a feature of watchlist creation with multiple features like defining multiple parameters of watchlist 
+-> creating a database for watchlist -> done
+-> adding a feature of watchlist creation with multiple features like defining multiple parameters of watchlist -> done
 
 -> feature in image search enhancing the images like adding zoom, crop, sharpen, eyes, smoothen etc before searching to the image --> done
 

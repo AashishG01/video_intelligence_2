@@ -773,6 +773,26 @@ async def update_subject(
 
     return {"status": "Subject Updated Successfully", "uuid": subject_uuid}
 
+# Add this near your other endpoints in newapi.py
+from pydantic import BaseModel
+
+class SystemStatus(BaseModel):
+    is_armed: bool
+
+@app.get("/api/system/status")
+async def get_system_status():
+    # If key doesn't exist, assume system is Armed (True) by default
+    status = redis_client.get("system_armed")
+    if status is None:
+        return {"is_armed": True}
+    return {"is_armed": status.decode('utf-8') == "1"}
+
+@app.post("/api/system/toggle")
+async def toggle_system(status: SystemStatus, admin_user: dict = Depends(require_admin)):
+    # Save as "1" for Armed, "0" for Disarmed
+    redis_client.set("system_armed", "1" if status.is_armed else "0")
+    return {"status": "System Armed" if status.is_armed else "System Disarmed", "is_armed": status.is_armed}
+
 # ==========================================
 # RUN
 # uvicorn newapi:app --host 0.0.0.0 --port 8000 --reload
