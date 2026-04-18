@@ -72,7 +72,7 @@ const ThreatAlertModal = ({ alertData, onAcknowledge }) => {
                                     src={`${BACKEND_URL}${alertData.reference_image}`}
                                     className="w-full h-full object-cover"
                                     alt="Reference"
-                                    onError={(e) => { e.target.onerror = null; e.target.src = "https://via.placeholder.com/300x400?text=NO+REFERENCE"; }}
+                                    onError={(e) => { e.target.onerror = null; e.target.src = "https://placehold.co/300x400/1e293b/ffffff?text=NO+REFERENCE"; }}
                                 />
                                 <div className="absolute top-2 left-2 bg-black/80 px-2 py-1 rounded text-[9px] font-bold text-slate-300 uppercase">File Photo</div>
                             </div>
@@ -85,7 +85,7 @@ const ThreatAlertModal = ({ alertData, onAcknowledge }) => {
                                     src={`${BACKEND_URL}${alertData.live_image}`}
                                     className="w-full h-full object-cover"
                                     alt="Live Match"
-                                    onError={(e) => { e.target.onerror = null; e.target.src = "https://via.placeholder.com/300x400?text=NO+LIVE+FEED"; }}
+                                    onError={(e) => { e.target.onerror = null; e.target.src = "https://placehold.co/300x400/1e293b/ffffff?text=NO+LIVE+FEED"; }}
                                 />
                                 <div className="absolute top-2 left-2 bg-red-600 px-2 py-1 rounded text-[9px] font-bold text-white uppercase flex items-center">
                                     <div className="w-1.5 h-1.5 bg-white rounded-full animate-ping mr-1.5"></div>
