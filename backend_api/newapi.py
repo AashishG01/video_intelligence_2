@@ -21,6 +21,7 @@ from auth import verify_password, get_password_hash, create_access_token, get_cu
 from pydantic import BaseModel as PydanticBaseModel
 from typing import List, Optional # Add this to your imports
 from fastapi import FastAPI, UploadFile, File, Query, HTTPException, WebSocket, Form, Depends
+import psycopg2
 
 # ==========================================
 # 1. SYSTEM SETUP
@@ -531,6 +532,46 @@ async def get_categories(current_user: dict = Depends(get_current_user)):
     cursor.close(); conn.close()
     return cats
 
+class CategoryData(PydanticBaseModel):
+    name: str
+    color_code: str = "#3b82f6"
+    description: str = ""
+
+@app.post("/api/watchlist/categories/add")
+async def add_category(cat: CategoryData, admin_user: dict = Depends(require_admin)):
+    conn = get_pg_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO watchlist_categories (name, color_code, description)
+            VALUES (%s, %s, %s) RETURNING id
+        """, (cat.name, cat.color_code, cat.description))
+        conn.commit()
+        return {"status": "Category Created"}
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail="A watchlist with this exact name already exists.")
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close(); conn.close()
+
+@app.delete("/api/watchlist/categories/remove/{cat_id}")
+async def remove_category(cat_id: int, admin_user: dict = Depends(require_admin)):
+    conn = get_pg_connection()
+    cursor = conn.cursor()
+    try:
+        # Note: Because of ON DELETE CASCADE in our SQL schema, deleting a category 
+        # will automatically remove the tags from any subjects assigned to it.
+        cursor.execute("DELETE FROM watchlist_categories WHERE id = %s", (cat_id,))
+        conn.commit()
+        return {"status": "Category Removed"}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close(); conn.close()
 
 @app.get("/api/subjects/list")
 async def list_subjects(current_user: dict = Depends(get_current_user)):
