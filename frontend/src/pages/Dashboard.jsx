@@ -6,10 +6,11 @@ import {
     Terminal,
     ShieldCheck,
     Users,
-    Power
+    Power,
+    Settings // ✅ ADDED: Imported Settings Icon
 } from 'lucide-react';
 import { WS_URL } from '../config';
-import api from '../api'; // Ensure your axios instance is imported
+import api from '../api'; 
 import { AuthContext } from '../context/AuthContext';
 
 // --- View & Component Imports ---
@@ -20,6 +21,7 @@ import SystemStatusView from '../views/SystemStatusView';
 import EventFeedView from '../views/EventFeedView';
 import AdminPanel from '../views/AdminPanel';
 import WatchlistManager from '../views/WatchlistManager';
+import AlertSettingsView from '../views/AlertSettingsView'; // ✅ ADDED: Imported the new view
 import ThreatAlertModal from '../components/ThreatAlertModal';
 
 const Dashboard = () => {
@@ -83,15 +85,15 @@ const Dashboard = () => {
                     setLiveAlerts(prev => [data, ...prev].slice(0, 50));
 
                     // 2. THE RED ALERT INTERCEPTOR (Overrides the UI)
-                    if (data.status === "MATCH") {
+                    if (data.status === "WATCHLIST_MATCH" || data.status === "MATCH") {
                         setCriticalAlert(data);
                         alarmAudio.loop = true;
                         alarmAudio.play().catch(err => console.log("Audio autoplay blocked by browser."));
                     }
 
                     // 3. Generate System Log Entry
-                    const statusText = data.status === "MATCH" ? "WATCHLIST MATCH" : "NEW SUBJECT";
-                    const logType = data.status === "MATCH" ? "error" : "success";
+                    const statusText = data.status.includes("MATCH") ? "WATCHLIST MATCH" : "NEW SUBJECT";
+                    const logType = data.status.includes("MATCH") ? "error" : "success";
                     const logMsg = `[CAM-${data.camera_id}] ${statusText}: ${data.person_id || data.full_name} (${(data.confidence * 100).toFixed(1)}%)`;
 
                     setSystemLogs(prev => [{
@@ -172,6 +174,7 @@ const Dashboard = () => {
         { id: 'watchlist', label: 'Watchlist', icon: Users },
         { id: 'status', label: 'System Status', icon: BarChart3 },
         { id: 'feed', label: 'Event Feed', icon: Terminal },
+        { id: 'alert_settings', label: 'Alert Settings', icon: Settings }, // ✅ ADDED: New Sidebar Tab
     ];
 
     const navItems = user?.role === 'admin'
@@ -188,6 +191,7 @@ const Dashboard = () => {
             case 'watchlist': return <WatchlistManager />;
             case 'status': return <SystemStatusView />;
             case 'feed': return <EventFeedView systemLogs={systemLogs} />;
+            case 'alert_settings': return <AlertSettingsView />; // ✅ ADDED: Route to the new component
             case 'admin': return user?.role === 'admin' ? <AdminPanel /> : <InvestigatorView />;
             default: return <LiveMonitorView liveAlerts={liveAlerts} />;
         }
@@ -198,8 +202,8 @@ const Dashboard = () => {
 
             {/* --- RED ALERT INTERCEPTOR MODAL --- */}
             <ThreatAlertModal
-                alertData={criticalAlert}
-                onAcknowledge={handleAcknowledgeAlert}
+                alert={criticalAlert} // Matched prop name from previous fix
+                onDismiss={handleAcknowledgeAlert} // Matched prop name from previous fix
             />
 
             {/* --- MODULAR SIDEBAR --- */}
