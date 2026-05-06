@@ -13,7 +13,7 @@ from insightface.app import FaceAnalysis
 # CONFIGURATION — Tune these values
 # ─────────────────────────────────────────
 CONFIDENCE_GATE   = 0.75   # Min face detection confidence from InsightFace
-MATCH_THRESHOLD   = 0.60   # Milvus Cosine DISTANCE threshold (Lower is better. < 0.60 is a match)
+MATCH_THRESHOLD   = 0.60   # DEFAULT Milvus Cosine DISTANCE threshold (Will be overridden by Redis)
 DEDUP_WINDOW_SEC  = 60     # Global dedup window per person (seconds) to prevent spamming the DB
 
 # ─────────────────────────────────────────
@@ -114,6 +114,13 @@ while True:
         if len(faces) == 0:
             continue
 
+        # ==========================================================
+        # 🎛️ DYNAMIC THRESHOLD SYNC
+        # Fetch the latest threshold from Redis (set by React UI)
+        # ==========================================================
+        raw_thresh = r.get("GLOBAL_MATCH_THRESHOLD")
+        CURRENT_MATCH_THRESHOLD = float(raw_thresh) if raw_thresh else MATCH_THRESHOLD
+
         for face in faces:
             # Drop low confidence faces (blurry, side profiles)
             if face.det_score < CONFIDENCE_GATE:
@@ -166,8 +173,8 @@ while True:
                         wl_dist = top_wl['distance']
                         wl_id = top_wl['entity']['watchlist_id']
                         
-                        # CRITICAL FIX: In Cosine Distance, < 0.60 is a MATCH.
-                        if wl_dist < MATCH_THRESHOLD:
+                        # ✅ USING DYNAMIC THRESHOLD FROM UI
+                        if wl_dist < CURRENT_MATCH_THRESHOLD:
                             is_watchlist_match = True
                             matched_watchlist_id = wl_id
                             person_id = wl_id
@@ -191,7 +198,7 @@ while True:
                                 matched_suspect_name = wl_id
                                 print(f"⚠️  Database Fetch Error: {db_err}")
                                 
-                            print(f"[{cam_id}] 🚨 WATCHLIST HIT: {matched_suspect_name} (Distance: {wl_dist:.4f})")
+                            print(f"[{cam_id}] 🚨 WATCHLIST HIT: {matched_suspect_name} (Distance: {wl_dist:.4f} | Thresh: {CURRENT_MATCH_THRESHOLD})")
                 except Exception as wl_err:
                     print(f"⚠️ Watchlist search error: {wl_err}")
 
@@ -212,8 +219,8 @@ while True:
                         top  = search_res[0][0]
                         dist = top['distance']
                         
-                        # CRITICAL FIX: In Cosine Distance, < 0.60 is a MATCH.
-                        if dist < MATCH_THRESHOLD:
+                        # ✅ USING DYNAMIC THRESHOLD FROM UI
+                        if dist < CURRENT_MATCH_THRESHOLD:
                             person_id = top['entity']['person_id']
                             is_match = True
                             final_match_distance = dist
@@ -279,7 +286,7 @@ while True:
 
             # ✅ STRICT API CONTRACT PAYLOAD FOR REACT 
             alert_payload = {
-                "status": ws_status,  # This will now correctly stay "WATCHLIST_MATCH"
+                "status": ws_status,  
                 "camera_id": cam_id,
                 "person_id": str(person_id),
                 "timestamp": timestamp,
@@ -288,7 +295,6 @@ while True:
             }
             
             if is_watchlist_match:
-                # ✅ The override line is GONE. It will no longer break the frontend.
                 alert_payload["full_name"] = matched_suspect_name 
                 alert_payload["risk_level"] = matched_risk_level 
                 alert_payload["reference_image"] = f"/images/watchlist/{matched_watchlist_id}.jpg" 

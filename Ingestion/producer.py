@@ -76,7 +76,7 @@ if __name__ == "__main__":
     cameras = {
         "cam1": "rtsp://admin:admin@172.16.0.151:554/live.sdp",
         "cam2": "rtsp://admin:admin@172.16.0.152:554/live.sdp",
-        "cam3": "rtsp://admin:123456@172.16.0.161:554/live.sdp",
+        "cam3": "rtsp://admin:admin@202.71.0.244:554/live.sdp",
         "cam4": "rtsp://admin:Admin@123@172.16.0.162:554/live.sdp"
     }
     

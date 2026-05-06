@@ -1,4 +1,5 @@
 import psycopg2
+import json
 from pymilvus import MilvusClient, DataType
 
 # ==========================================
@@ -88,7 +89,31 @@ try:
         ON CONFLICT (name) DO NOTHING;
     """)
     
-    print("✅ PostgreSQL Infrastructure Ready (RBAC + Dossier + Watchlists).")
+    # ==========================================
+    # --- NEW: SYSTEM ALERT SETTINGS TABLE ---
+    # ==========================================
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS system_alert_settings (
+            id INT PRIMARY KEY DEFAULT 1,
+            match_threshold FLOAT NOT NULL DEFAULT 0.60,
+            alert_sound_type VARCHAR(50) NOT NULL DEFAULT 'siren',
+            notify_emails JSONB NOT NULL DEFAULT '[]',
+            notify_phones JSONB NOT NULL DEFAULT '[]',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    # Inject default configuration safely (Runs only once on first boot)
+    default_emails = json.dumps(["admin@core-security.com"])
+    default_phones = json.dumps(["+919876543210"])
+
+    cursor.execute("""
+        INSERT INTO system_alert_settings (id, match_threshold, alert_sound_type, notify_emails, notify_phones) 
+        VALUES (1, 0.60, 'siren', %s, %s)
+        ON CONFLICT (id) DO NOTHING;
+    """, (default_emails, default_phones))
+
+    print("✅ PostgreSQL Infrastructure Ready (RBAC + Dossier + Watchlists + Alert Settings).")
     
     cursor.close()
     conn.close()

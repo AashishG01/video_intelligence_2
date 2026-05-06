@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import {
     MonitorPlay,
     UserSearch,
@@ -7,7 +7,7 @@ import {
     ShieldCheck,
     Users,
     Power,
-    Settings // ✅ ADDED: Imported Settings Icon
+    Settings
 } from 'lucide-react';
 import { WS_URL } from '../config';
 import api from '../api'; 
@@ -21,7 +21,7 @@ import SystemStatusView from '../views/SystemStatusView';
 import EventFeedView from '../views/EventFeedView';
 import AdminPanel from '../views/AdminPanel';
 import WatchlistManager from '../views/WatchlistManager';
-import AlertSettingsView from '../views/AlertSettingsView'; // ✅ ADDED: Imported the new view
+import AlertSettingsView from '../views/AlertSettingsView';
 import ThreatAlertModal from '../components/ThreatAlertModal';
 
 const Dashboard = () => {
@@ -36,25 +36,50 @@ const Dashboard = () => {
 
     // --- Threat Alert Interceptor State ---
     const [criticalAlert, setCriticalAlert] = useState(null);
-    const [alarmAudio] = useState(new Audio('/alert.mp3'));
+    
+    // ✅ UPGRADED: Using useRef for Audio prevents React from constantly re-rendering the WebSocket
+    const alarmAudioRef = useRef(new Audio('/siren.mp3'));
 
     // --- System Kill Switch State ---
     const [isArmed, setIsArmed] = useState(true);
     const [isToggling, setIsToggling] = useState(false);
 
     // ==========================================
-    // INITIAL BOOT: Check System Status
+    // INITIAL BOOT: Check System Status & Audio Settings
     // ==========================================
     useEffect(() => {
-        const checkStatus = async () => {
+        const bootSystem = async () => {
+            // 1. Fetch Armed Status
             try {
-                const res = await api.get('/api/system/status');
-                setIsArmed(res.data.is_armed);
+                const resStatus = await api.get('/api/system/status');
+                setIsArmed(resStatus.data.is_armed);
             } catch (err) {
                 console.error("Failed to fetch initial system status.");
             }
+
+            // 2. ✅ FETCH DYNAMIC AUDIO SETTINGS (Upgraded for Custom Audio)
+            try {
+                const resAudio = await api.get('/api/settings/alerts');
+                if (resAudio.data) {
+                    const soundType = resAudio.data.alert_sound_type;
+                    
+                    if (soundType === 'silent') {
+                        alarmAudioRef.current = null; // No sound
+                    } else if (soundType === 'custom') {
+                        // 👈 FETCH CUSTOM AUDIO DIRECTLY FROM FASTAPI MOUNT
+                        const customUrl = resAudio.data.custom_audio_url;
+                        // Pointing to FastAPI backend port 8000
+                        alarmAudioRef.current = new Audio(`http://localhost:8000${customUrl}`);
+                    } else {
+                        // Default built-in sounds (siren, subtle)
+                        alarmAudioRef.current = new Audio(`/${soundType}.mp3`);
+                    }
+                }
+            } catch (err) {
+                console.error("Audio Config Error:", err);
+            }
         };
-        checkStatus();
+        bootSystem();
     }, []);
 
     // ==========================================
@@ -87,8 +112,12 @@ const Dashboard = () => {
                     // 2. THE RED ALERT INTERCEPTOR (Overrides the UI)
                     if (data.status === "WATCHLIST_MATCH" || data.status === "MATCH") {
                         setCriticalAlert(data);
-                        alarmAudio.loop = true;
-                        alarmAudio.play().catch(err => console.log("Audio autoplay blocked by browser."));
+                        
+                        // ✅ DYNAMIC AUDIO PLAYBACK
+                        if (alarmAudioRef.current) {
+                            alarmAudioRef.current.loop = true;
+                            alarmAudioRef.current.play().catch(err => console.log("Audio autoplay blocked by browser."));
+                        }
                     }
 
                     // 3. Generate System Log Entry
@@ -124,18 +153,22 @@ const Dashboard = () => {
 
         return () => {
             if (ws) ws.close();
-            alarmAudio.pause();
-            alarmAudio.currentTime = 0;
+            if (alarmAudioRef.current) {
+                alarmAudioRef.current.pause();
+                alarmAudioRef.current.currentTime = 0;
+            }
         };
-    }, [alarmAudio]);
+    }, []); 
 
     // ==========================================
     // ALERT ACKNOWLEDGEMENT
     // ==========================================
     const handleAcknowledgeAlert = () => {
         setCriticalAlert(null);
-        alarmAudio.pause();
-        alarmAudio.currentTime = 0;
+        if (alarmAudioRef.current) {
+            alarmAudioRef.current.pause();
+            alarmAudioRef.current.currentTime = 0;
+        }
     };
 
     // ==========================================
@@ -174,7 +207,7 @@ const Dashboard = () => {
         { id: 'watchlist', label: 'Watchlist', icon: Users },
         { id: 'status', label: 'System Status', icon: BarChart3 },
         { id: 'feed', label: 'Event Feed', icon: Terminal },
-        { id: 'alert_settings', label: 'Alert Settings', icon: Settings }, // ✅ ADDED: New Sidebar Tab
+        { id: 'alert_settings', label: 'Alert Settings', icon: Settings }, 
     ];
 
     const navItems = user?.role === 'admin'
@@ -191,7 +224,7 @@ const Dashboard = () => {
             case 'watchlist': return <WatchlistManager />;
             case 'status': return <SystemStatusView />;
             case 'feed': return <EventFeedView systemLogs={systemLogs} />;
-            case 'alert_settings': return <AlertSettingsView />; // ✅ ADDED: Route to the new component
+            case 'alert_settings': return <AlertSettingsView />; 
             case 'admin': return user?.role === 'admin' ? <AdminPanel /> : <InvestigatorView />;
             default: return <LiveMonitorView liveAlerts={liveAlerts} />;
         }
@@ -202,8 +235,8 @@ const Dashboard = () => {
 
             {/* --- RED ALERT INTERCEPTOR MODAL --- */}
             <ThreatAlertModal
-                alert={criticalAlert} // Matched prop name from previous fix
-                onDismiss={handleAcknowledgeAlert} // Matched prop name from previous fix
+                alert={criticalAlert} 
+                onDismiss={handleAcknowledgeAlert} 
             />
 
             {/* --- MODULAR SIDEBAR --- */}

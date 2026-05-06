@@ -22,6 +22,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from typing import List, Optional # Add this to your imports
 from fastapi import FastAPI, UploadFile, File, Query, HTTPException, WebSocket, Form, Depends
 import psycopg2
+import shutil # 👈 Ye import add kar lena top par
 
 # ==========================================
 # 1. SYSTEM SETUP
@@ -53,6 +54,12 @@ app.mount("/images/sightings", StaticFiles(directory=SIGHTINGS_FOLDER), name="si
 
 # 3. Mount the general images folder (Keep this last as a fallback)
 app.mount("/images", StaticFiles(directory=SAVE_FOLDER), name="images")
+
+
+# --- Add this right below your SIGHTINGS_FOLDER mount ---
+AUDIO_FOLDER = "custom_audio"
+os.makedirs(AUDIO_FOLDER, exist_ok=True)
+app.mount("/audio", StaticFiles(directory=AUDIO_FOLDER), name="custom_audio")
 
 # ==========================================
 # 2. INFRASTRUCTURE CONNECTIONS
@@ -794,6 +801,143 @@ async def toggle_system(status: SystemStatus, admin_user: dict = Depends(require
     # Save as "1" for Armed, "0" for Disarmed
     r.set("system_armed", "1" if status.is_armed else "0")
     return {"status": "System Armed" if status.is_armed else "System Disarmed", "is_armed": status.is_armed}
+
+
+
+from pydantic import BaseModel
+from typing import List
+import json
+
+# ==========================================
+# PYDANTIC MODELS FOR SETTINGS
+# ==========================================
+class AlertSettingsConfig(BaseModel):
+    match_threshold: float
+    alert_sound_type: str
+    notify_emails: List[str]
+    notify_phones: List[str]
+
+
+# ==========================================
+# GET: FETCH CURRENT SETTINGS
+# ==========================================
+@app.get("/api/settings/alerts")
+def get_alert_settings():
+    try:
+        # ✅ Correctly opening DB connection
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "SELECT match_threshold, alert_sound_type, notify_emails, notify_phones FROM system_alert_settings WHERE id = 1"
+        )
+        row = cursor.fetchone()
+        
+        cursor.close()
+        conn.close()
+
+        if row:
+            # 👈 FETCH CUSTOM AUDIO URL FROM REDIS (Fallback to default if not set)
+            custom_audio_raw = r.get("GLOBAL_CUSTOM_AUDIO_URL")
+            custom_audio_url = custom_audio_raw if custom_audio_raw else "/audio/custom_alert.mp3"
+            
+            return {
+                "match_threshold": row[0],
+                "alert_sound_type": row[1],
+                "notify_emails": row[2] if isinstance(row[2], list) else json.loads(row[2]),
+                "notify_phones": row[3] if isinstance(row[3], list) else json.loads(row[3]),
+                "custom_audio_url": custom_audio_url # 👈 NEW LINE ADDED
+            }
+        return {"error": "Configuration not found"}
+    except Exception as e:
+        print(f"❌ Error fetching settings: {e}")
+        return {"error": str(e)}
+
+# ==========================================
+# POST: UPDATE SETTINGS & SYNC TO REDIS
+# ==========================================
+@app.post("/api/settings/alerts")
+def update_alert_settings(settings: AlertSettingsConfig):
+    try:
+        print(f"📥 Received settings from UI: {settings.dict()}")
+        
+        # 1. PEHLE REDIS UPDATE KARO (Taaki Worker turant chal jaye)
+        try:
+            r.set("GLOBAL_MATCH_THRESHOLD", settings.match_threshold)
+            r.set("GLOBAL_ALERT_SOUND", settings.alert_sound_type)
+            r.set("GLOBAL_NOTIFY_EMAILS", json.dumps(settings.notify_emails))
+            r.set("GLOBAL_NOTIFY_PHONES", json.dumps(settings.notify_phones))
+            print("✅ Redis Updated Successfully!")
+        except Exception as redis_err:
+            print(f"❌ Redis Update Failed: {redis_err}")
+
+        # 2. PHIR POSTGRES MEIN SAVE KARO (Permanent storage)
+        try:
+            # ✅ Correctly opening DB connection
+            conn = get_pg_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                """
+                INSERT INTO system_alert_settings (id, match_threshold, alert_sound_type, notify_emails, notify_phones, updated_at)
+                VALUES (1, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (id) DO UPDATE SET 
+                    match_threshold = EXCLUDED.match_threshold,
+                    alert_sound_type = EXCLUDED.alert_sound_type,
+                    notify_emails = EXCLUDED.notify_emails,
+                    notify_phones = EXCLUDED.notify_phones,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    settings.match_threshold, 
+                    settings.alert_sound_type, 
+                    json.dumps(settings.notify_emails), 
+                    json.dumps(settings.notify_phones)
+                )
+            )
+            conn.commit()
+            cursor.close()
+            conn.close()
+            print("✅ Postgres Updated Successfully!")
+        except Exception as pg_err:
+            print(f"❌ Postgres Update Failed: {pg_err}")
+            # Hum fail nahi karenge, kyunki Redis update ho chuka hai
+            pass
+
+        return {"message": "Configuration deployed successfully", "status": "success"}
+    
+    except Exception as e:
+        print(f"❌ Critical API Error in Alert Settings: {e}")
+        return {"error": str(e)}
+    
+# ==========================================
+# POST: UPLOAD CUSTOM AUDIO FILE
+# ==========================================
+@app.post("/api/settings/upload_audio")
+async def upload_custom_audio(file: UploadFile = File(...)):
+    try:
+        # Validate extension
+        ext = file.filename.split('.')[-1].lower()
+        if ext not in ['mp3', 'wav', 'ogg']:
+            return {"error": "Invalid file format. Use MP3, WAV, or OGG."}
+
+        # Clear old audio files to prevent storage bloat
+        for old_file in os.listdir(AUDIO_FOLDER):
+            if old_file.startswith("custom_alert"):
+                os.remove(os.path.join(AUDIO_FOLDER, old_file))
+
+        # Save new file
+        file_path = os.path.join(AUDIO_FOLDER, f"custom_alert.{ext}")
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # Save the path in Redis so Dashboard knows exactly what to fetch
+        r.set("GLOBAL_CUSTOM_AUDIO_URL", f"/audio/custom_alert.{ext}")
+        
+        return {"status": "success", "url": f"/audio/custom_alert.{ext}"}
+    except Exception as e:
+        print(f"❌ Audio Upload Error: {e}")
+        return {"error": "Failed to upload audio"}
 
 # ==========================================
 # RUN
