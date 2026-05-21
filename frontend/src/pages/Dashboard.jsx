@@ -7,7 +7,8 @@ import {
     ShieldCheck,
     Users,
     Power,
-    Settings
+    Settings,
+    Video
 } from 'lucide-react';
 import { WS_URL } from '../config';
 import api from '../api'; 
@@ -22,6 +23,7 @@ import EventFeedView from '../views/EventFeedView';
 import AdminPanel from '../views/AdminPanel';
 import WatchlistManager from '../views/WatchlistManager';
 import AlertSettingsView from '../views/AlertSettingsView';
+import CameraSettingsView from '../views/CameraSettingsView';
 import ThreatAlertModal from '../components/ThreatAlertModal';
 
 const Dashboard = () => {
@@ -109,8 +111,10 @@ const Dashboard = () => {
                     // 1. Inject into standard Live Alerts (Sidebar/Monitor)
                     setLiveAlerts(prev => [data, ...prev].slice(0, 50));
 
-                    // 2. THE RED ALERT INTERCEPTOR (Overrides the UI)
-                    if (data.status === "WATCHLIST_MATCH" || data.status === "MATCH") {
+                    // 2. THE RED ALERT INTERCEPTOR — WATCHLIST HITS ONLY
+                    // Only WATCHLIST_MATCH payloads carry full_name / risk_level / reference_image.
+                    // Generic MATCH alerts do NOT have these fields, so the modal must not fire for them.
+                    if (data.status === "WATCHLIST_MATCH" && data.is_armed === true) {
                         setCriticalAlert(data);
                         
                         // ✅ DYNAMIC AUDIO PLAYBACK
@@ -211,7 +215,7 @@ const Dashboard = () => {
     ];
 
     const navItems = user?.role === 'admin'
-        ? [...baseNavItems, { id: 'admin', label: 'Admin Control', icon: ShieldCheck }]
+        ? [...baseNavItems, { id: 'camera_settings', label: 'Camera Config', icon: Video }, { id: 'admin', label: 'Admin Control', icon: ShieldCheck }]
         : baseNavItems;
 
     // ==========================================
@@ -225,6 +229,7 @@ const Dashboard = () => {
             case 'status': return <SystemStatusView />;
             case 'feed': return <EventFeedView systemLogs={systemLogs} />;
             case 'alert_settings': return <AlertSettingsView />; 
+            case 'camera_settings': return user?.role === 'admin' ? <CameraSettingsView /> : <LiveMonitorView liveAlerts={liveAlerts} />;
             case 'admin': return user?.role === 'admin' ? <AdminPanel /> : <InvestigatorView />;
             default: return <LiveMonitorView liveAlerts={liveAlerts} />;
         }

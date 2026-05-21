@@ -1,11 +1,30 @@
+import os
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-# SECURITY WARNING: In a real enterprise app, put this in an .env file.
-SECRET_KEY = "core_surveillance_absolute_zero_trust_key"
+# ─────────────────────────────────────────
+# JWT SECURITY CONFIGURATION
+# SECRET_KEY must be set as an environment variable — never hardcode it.
+# Generate a strong key with:  python -c "import secrets; print(secrets.token_hex(32))"
+# Then set it before starting the API:
+#   Linux/macOS : export JWT_SECRET_KEY="<your-generated-key>"
+#   Windows CMD : set JWT_SECRET_KEY=<your-generated-key>
+#   .env file   : JWT_SECRET_KEY=<your-generated-key>  (add .env to .gitignore)
+# ─────────────────────────────────────────
+SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "\n❌  JWT_SECRET_KEY environment variable is not set!\n"
+        "    The API server refuses to start without it — a missing key means\n"
+        "    all authentication is broken or trivially bypassable.\n"
+        "    Generate one with:  python -c \"import secrets; print(secrets.token_hex(32))\"\n"
+        "    Then export it:     export JWT_SECRET_KEY=<generated-value>\n"
+        "    See notes.md § BUG-004 for full setup instructions."
+    )
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 Hours
 

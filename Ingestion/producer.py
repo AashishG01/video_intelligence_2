@@ -5,6 +5,8 @@ import redis
 import json
 import base64
 import os
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # ==========================================
 # SYSTEM OPTIMIZATIONS
@@ -71,35 +73,87 @@ class CameraProducer(threading.Thread):
 
         cap.release()
 
-if __name__ == "__main__":
-    # Your exact 4 cameras
-    cameras = {
-        "cam1": "rtsp://admin:admin@172.16.0.151:554/live.sdp",
-        "cam2": "rtsp://admin:admin@172.16.0.152:554/live.sdp",
-        "cam3": "rtsp://admin:admin@202.71.0.244:554/live.sdp",
-        "cam4": "rtsp://admin:Admin@123@172.16.0.162:554/live.sdp"
-    }
-    
-    threads = []
+def get_active_cameras():
+    """Fetch active cameras from the PostgreSQL database."""
     try:
-        print("🟢 Starting Camera Ingestion Engine...")
-        for cam_id, url in cameras.items():
-            t = CameraProducer(cam_id, url, fps_limit=1)
-            t.start()
-            threads.append(t)
-            
-        print("✅ Producers online. Pushing frames to AI Queue and Web Feed. Press Ctrl+C to stop.")
+        conn = psycopg2.connect(
+            dbname="surveillance",
+            user="admin",
+            password="password",
+            host="localhost",
+            port="5432"
+        )
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT camera_id, rtsp_url, fps_limit FROM cameras WHERE is_active = TRUE")
+        cameras = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {cam['camera_id']: cam for cam in cameras}
+    except Exception as e:
+        print(f"⚠️ Failed to fetch cameras from DB: {e}")
+        return None
+
+if __name__ == "__main__":
+    active_threads = {}  # {camera_id: CameraProducer_Thread}
+    
+    try:
+        print("🟢 Starting Dynamic Camera Ingestion Engine...")
+        print("✅ Polling database for camera configurations...")
         
-        # Keep main thread alive and monitor the queue
+        # Keep main thread alive, monitor the queue, and sync cameras dynamically
+        last_sync_time = 0
+        SYNC_INTERVAL = 5  # Check DB every 5 seconds
+        
         while True:
+            current_time = time.time()
+            
+            # --- DYNAMIC CAMERA SYNC ---
+            if current_time - last_sync_time >= SYNC_INTERVAL:
+                db_cameras = get_active_cameras()
+                
+                if db_cameras is not None:
+                    db_camera_ids = set(db_cameras.keys())
+                    running_camera_ids = set(active_threads.keys())
+                    
+                    # 1. Start new cameras
+                    for cam_id in db_camera_ids - running_camera_ids:
+                        cam_info = db_cameras[cam_id]
+                        print(f"\n🎥 [NEW CAMERA DETECTED] Starting {cam_id}...")
+                        t = CameraProducer(cam_id, cam_info['rtsp_url'], fps_limit=cam_info['fps_limit'])
+                        t.start()
+                        active_threads[cam_id] = t
+                        
+                    # 2. Stop deleted/deactivated cameras
+                    for cam_id in running_camera_ids - db_camera_ids:
+                        print(f"\n🛑 [CAMERA REMOVED] Stopping {cam_id}...")
+                        active_threads[cam_id].running = False
+                        # We don't join() immediately to avoid blocking the sync loop
+                        del active_threads[cam_id]
+                        
+                    # 3. Check for config changes (RTSP URL or FPS limit changed)
+                    for cam_id in db_camera_ids.intersection(running_camera_ids):
+                        cam_info = db_cameras[cam_id]
+                        running_thread = active_threads[cam_id]
+                        
+                        if running_thread.rtsp_url != cam_info['rtsp_url'] or running_thread.fps_limit != cam_info['fps_limit']:
+                            print(f"\n⚙️ [CONFIG CHANGED] Restarting {cam_id}...")
+                            running_thread.running = False
+                            
+                            t = CameraProducer(cam_id, cam_info['rtsp_url'], fps_limit=cam_info['fps_limit'])
+                            t.start()
+                            active_threads[cam_id] = t
+                            
+                last_sync_time = current_time
+
+            # --- MONITOR QUEUE ---
             queue_size = r.llen("raw_frames_queue")
-            print(f"Current Redis AI Queue Size: {queue_size} frames waiting", end='\r')
+            print(f"Current Redis AI Queue Size: {queue_size} frames waiting | Active Cameras: {len(active_threads)}", end='\r')
             time.sleep(1)
             
     except KeyboardInterrupt:
         print("\n🛑 Shutting down producers gracefully...")
-        for t in threads:
+        for t in active_threads.values():
             t.running = False
-        for t in threads:
+        for t in active_threads.values():
             t.join()
         print("✅ Shutdown complete.")

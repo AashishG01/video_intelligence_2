@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MonitorPlay, AlertCircle, RefreshCw, User } from 'lucide-react';
 import { MEDIAMTX_URL, getImageUrl } from '../config';
-import ThreatAlertModal from '../components/ThreatAlertModal';
 
 // ================================
 // WebRTC Player Component
@@ -100,10 +99,10 @@ const LiveMonitorView = ({ liveAlerts }) => {
         cam1: true, cam2: true, cam3: true, cam4: true
     });
 
-    const [watchlistAlert, setWatchlistAlert] = useState(null);
     const [selectedCam, setSelectedCam] = useState(null);
 
-    // ESC key close for fullscreen
+
+    // ESC key to close fullscreen camera view
     useEffect(() => {
         const handleEsc = (e) => {
             if (e.key === "Escape") setSelectedCam(null);
@@ -112,42 +111,12 @@ const LiveMonitorView = ({ liveAlerts }) => {
         return () => window.removeEventListener("keydown", handleEsc);
     }, []);
 
-    // Monitor incoming alerts from WebSocket
-    useEffect(() => {
-        if (liveAlerts.length > 0) {
-            const latest = liveAlerts[0];
-            // 🚨 FORCED TRIGGER: Listens for BOTH Watchlist hits and General DB hits to ensure the modal pops
-            if (latest.status === "WATCHLIST_MATCH" || latest.status === "MATCH") {
-                setWatchlistAlert(latest);
-            }
-        }
-    }, [liveAlerts]);
-
     const handleStreamError = (camId) => {
         setCamStatus(prev => ({ ...prev, [camId]: false }));
     };
 
     return (
         <div className="flex h-full relative bg-slate-50 overflow-hidden">
-
-            {/* ========================= */}
-            {/* 🚨 THE FULLSCREEN RED ALERT MODAL 🚨 */}
-            {/* ========================= */}
-            {watchlistAlert && (
-                <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-md flex items-center justify-center">
-                    <ThreatAlertModal 
-                        isOpen={true} 
-                        alert={{
-                            ...watchlistAlert,
-                            // Fallbacks applied to prevent React crashes on normal MATCHes
-                            full_name: watchlistAlert.full_name || watchlistAlert.person_id || "UNKNOWN SUBJECT",
-                            risk_level: watchlistAlert.risk_level || "UNKNOWN",
-                            reference_image: watchlistAlert.reference_image || null
-                        }}
-                        onDismiss={() => setWatchlistAlert(null)} 
-                    />
-                </div>
-            )}
 
             {/* MAIN CONTENT AREA */}
             <div className="flex-1 p-6 overflow-auto">

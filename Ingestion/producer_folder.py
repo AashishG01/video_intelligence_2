@@ -39,7 +39,7 @@ class VideoFileProducer(threading.Thread):
         if video_fps <= 0 or math.isnan(video_fps): 
             video_fps = 25.0 
             
-        frames_to_skip = int(video_fps * self.process_every_n_seconds)
+        frames_to_skip = max(1, int(video_fps * self.process_every_n_seconds))
         
         print(f"[{self.camera_id}] 🎬 Starting Full-Speed Ingestion...")
         print(f"[{self.camera_id}] ⚡ Video FPS: {video_fps:.1f} | Processing 1 frame every {frames_to_skip} frames.")

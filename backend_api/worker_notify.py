@@ -1,3 +1,4 @@
+import os
 import redis
 import json
 import smtplib
@@ -6,25 +7,39 @@ from email.mime.multipart import MIMEMultipart
 import time
 
 # ─────────────────────────────────────────
-# CONFIGURATION — Replace with your credentials
+# CONFIGURATION — Loaded from environment variables
+# ─────────────────────────────────────────
+# Set these before starting the process:
+#   Linux/macOS : export SMTP_SENDER_EMAIL="you@gmail.com"
+#                 export SMTP_APP_PASSWORD="xxxx xxxx xxxx xxxx"
+#   Windows CMD : set SMTP_SENDER_EMAIL=you@gmail.com
+#                 set SMTP_APP_PASSWORD=xxxx xxxx xxxx xxxx
+#   .env file   : Use python-dotenv and add both keys to .env (add .env to .gitignore)
 # ─────────────────────────────────────────
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SENDER_EMAIL = "driveblade7@gmail.com"      # 👈 Apna Gmail daalo
-SENDER_PASSWORD = "rbol hixn fntu rrpy"    # 👈 Apna 16-digit App Password daalo (bina space ke)
+SENDER_EMAIL    = os.environ.get("SMTP_SENDER_EMAIL")
+SENDER_PASSWORD = os.environ.get("SMTP_APP_PASSWORD")
 
-EMAIL_COOLDOWN_SEC = 300  # Ek hi bande ka email dubara 5 minute (300 sec) tak nahi jayega
+# ── Fail fast: refuse to start if credentials are missing ──
+if not SENDER_EMAIL or not SENDER_PASSWORD:
+    raise EnvironmentError(
+        "\n❌  SMTP credentials not set!\n"
+        "    Please set the following environment variables before starting:\n"
+        "      SMTP_SENDER_EMAIL  — your Gmail address\n"
+        "      SMTP_APP_PASSWORD  — your 16-character Gmail App Password\n"
+        "    See notes.md § BUG-003 for full setup instructions."
+    )
+
+EMAIL_COOLDOWN_SEC = 300  # Don't re-send email for the same person within 5 minutes
 
 # ─────────────────────────────────────────
 # 1. Connections
 # ─────────────────────────────────────────
-print("⏳ Connecting to Redis...")
-r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
-pubsub = r.pubsub()
-
-# Hum wahi channel sunenge jo React UI sunta hai
-pubsub.subscribe('live_face_alerts')
-print("📧 Notification Microservice Online. Awaiting Threat Intel...")
+# ─────────────────────────────────────────
+# 1. Connections & Setup
+# ─────────────────────────────────────────
+print("⏳ Initializing Notification Microservice...")
 
 # ─────────────────────────────────────────
 # 2. Email Sending Engine (Tactical HTML)
@@ -108,38 +123,61 @@ def send_threat_email(alert_data, recipient_emails):
 # ─────────────────────────────────────────
 # 3. Main Listening Loop
 # ─────────────────────────────────────────
-for message in pubsub.listen():
-    if message['type'] == 'message':
-        try:
-            alert = json.loads(message['data'])
+# ─────────────────────────────────────────
+# 3. Main Listening Loop (Auto-Recovering)
+# ─────────────────────────────────────────
+print("📧 Notification Microservice Online. Awaiting Threat Intel...")
 
-            # RULE 1: We only escalate if it's a Watchlist Match. We don't spam for unknown people.
-            if alert.get('status') == 'WATCHLIST_MATCH':
-                person_id = alert.get('person_id')
+while True:
+    try:
+        r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+        pubsub = r.pubsub()
+        pubsub.subscribe('live_face_alerts')
+        
+        for message in pubsub.listen():
+            if message['type'] == 'message':
+                try:
+                    alert = json.loads(message['data'])
 
-                # RULE 2: Anti-Spam Check (Specific to Emails)
-                # Ensure we don't send 50 emails if the suspect stands in front of the camera for 2 minutes
-                email_lock_key = f"email_sent_{person_id}"
-                if r.exists(email_lock_key):
-                    print(f"🔕 Email for {person_id} is on cooldown. Skipping.")
-                    continue
+                    # RULE 1: We only escalate if it's a Watchlist Match. We don't spam for unknown people.
+                    if alert.get('status') == 'WATCHLIST_MATCH':
+                        # Check if system is armed before sending emails
+                        if not alert.get('is_armed', True):
+                            print(f"🔕 System is DISARMED. Skipping email for {alert.get('full_name', 'Unknown')}.")
+                            continue
 
-                # RULE 3: Fetch the dynamically assigned emails from Redis
-                raw_emails = r.get("GLOBAL_NOTIFY_EMAILS")
-                if raw_emails:
-                    target_emails = json.loads(raw_emails)
-                    if len(target_emails) > 0:
-                        print(f"🚨 ALERT TRIGGERED! Escalating to {len(target_emails)} operators...")
-                        
-                        # Fire the email
-                        send_threat_email(alert, target_emails)
-                        
-                        # Lock the email system for this specific person for 5 minutes
-                        r.setex(email_lock_key, EMAIL_COOLDOWN_SEC, "1")
-                    else:
-                        print("⚠️ Threat detected, but NO EMAILS configured in C.O.R.E UI.")
-                else:
-                    print("⚠️ Threat detected, but GLOBAL_NOTIFY_EMAILS key is missing in Redis.")
+                        person_id = alert.get('person_id')
 
-        except Exception as e:
-            print(f"⚠️ Notification Worker Error: {e}")
+                        # RULE 2: Anti-Spam Check (Specific to Emails)
+                        email_lock_key = f"email_sent_{person_id}"
+                        if r.exists(email_lock_key):
+                            print(f"🔕 Email for {person_id} is on cooldown. Skipping.")
+                            continue
+
+                        # RULE 3: Fetch the dynamically assigned emails from Redis
+                        raw_emails = r.get("GLOBAL_NOTIFY_EMAILS")
+                        if raw_emails:
+                            target_emails = json.loads(raw_emails)
+                            if len(target_emails) > 0:
+                                print(f"🚨 ALERT TRIGGERED! Escalating to {len(target_emails)} operators...")
+                                
+                                # Fire the email
+                                send_threat_email(alert, target_emails)
+                                
+                                # Lock the email system for this specific person for 5 minutes
+                                r.setex(email_lock_key, EMAIL_COOLDOWN_SEC, "1")
+                            else:
+                                print("⚠️ Threat detected, but NO EMAILS configured in C.O.R.E UI.")
+                        else:
+                            print("⚠️ Threat detected, but GLOBAL_NOTIFY_EMAILS key is missing in Redis.")
+
+                except Exception as e:
+                    print(f"⚠️ Notification Message Parsing Error: {e}")
+                    
+    except KeyboardInterrupt:
+        print("\n🛑 Notification Microservice stopped by user.")
+        break
+    except Exception as e:
+        print(f"⚠️ Redis Connection Lost in Notification Worker: {e}")
+        print("🔄 Attempting to reconnect in 5 seconds...")
+        time.sleep(5)

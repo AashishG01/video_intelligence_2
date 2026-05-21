@@ -49,7 +49,7 @@ if not milvus_client.has_collection(COLLECTION_NAME):
     milvus_client.create_collection(collection_name=COLLECTION_NAME, dimension=512, metric_type="COSINE", auto_id=True)
 milvus_client.load_collection(COLLECTION_NAME)
 
-SAVE_FOLDER = "../4_backend_api/captured_faces"
+SAVE_FOLDER = "../backend_api/captured_faces"
 os.makedirs(SAVE_FOLDER, exist_ok=True)
 
 # ─────────────────────────────────────────
@@ -120,7 +120,7 @@ def flush_track_to_database(track_data):
     )
     if search_res and len(search_res[0]) > 0:
         top = search_res[0][0]
-        if top['distance'] > MATCH_THRESHOLD:
+        if top['distance'] < MATCH_THRESHOLD:
             person_id = top['entity']['person_id']
             is_match  = True
 
@@ -177,10 +177,11 @@ print("✅ Face Worker Online. Awaiting tracked frames...")
 while True:
     try:
         # Pull from queue
-        queue_name, msg = r.brpop("face_ready_queue", timeout=1)
+        result = r.brpop("face_ready_queue", timeout=1)
         
-        # If queue is empty, still check for timeouts, then loop
-        if msg:
+        # If queue is empty, result is None. If it has data, unpack it.
+        if result:
+            queue_name, msg = result
             payload   = json.loads(msg.decode('utf-8'))
             cam_id    = payload['camera_id']
             timestamp = payload['timestamp']

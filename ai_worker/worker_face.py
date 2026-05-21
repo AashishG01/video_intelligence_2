@@ -13,7 +13,12 @@ from insightface.app import FaceAnalysis
 # CONFIGURATION — Tune these values
 # ─────────────────────────────────────────
 CONFIDENCE_GATE   = 0.75   # Min face detection confidence from InsightFace
-MATCH_THRESHOLD   = 0.60   # DEFAULT Milvus Cosine DISTANCE threshold (Will be overridden by Redis)
+# ⚠️  COSINE DISTANCE threshold — NOT a similarity score.
+# Milvus COSINE distance: 0.0 = identical faces, 1.0 = completely different.
+# A LOWER value = stricter matching (higher confidence a face belongs to a known person).
+# 0.35 distance  ≈  65%+ cosine similarity  →  tight, production-safe default.
+# The UI slider writes to Redis key GLOBAL_MATCH_THRESHOLD and overrides this at runtime.
+MATCH_THRESHOLD   = 0.35   # DEFAULT Milvus Cosine DISTANCE threshold (overridden by Redis/UI)
 DEDUP_WINDOW_SEC  = 60     # Global dedup window per person (seconds) to prevent spamming the DB
 
 # ─────────────────────────────────────────
@@ -174,7 +179,9 @@ while True:
                         wl_id = top_wl['entity']['watchlist_id']
                         
                         # ✅ USING DYNAMIC THRESHOLD FROM UI
-                        if wl_dist < CURRENT_MATCH_THRESHOLD:
+                        # COSINE DISTANCE: match when dist is LOW (faces are similar).
+                        # e.g. dist=0.20 means ~80% similar → strong watchlist hit.
+                        if wl_dist < CURRENT_MATCH_THRESHOLD:  # dist < 0.35 by default
                             is_watchlist_match = True
                             matched_watchlist_id = wl_id
                             person_id = wl_id
@@ -182,21 +189,19 @@ while True:
                             
                             # Fetch suspect real name & risk level from PostgreSQL
                             try:
-                                # Try enterprise subjects table first
                                 pg_cursor.execute("SELECT full_name, risk_level FROM subjects WHERE subject_uuid = %s", (wl_id,))
                                 row = pg_cursor.fetchone()
                                 if row:
                                     matched_suspect_name = row[0]
                                     matched_risk_level = row[1]
                                 else:
-                                    # Fallback to old watchlist table
-                                    pg_cursor.execute("SELECT name FROM watchlist WHERE watchlist_id = %s", (wl_id,))
-                                    row = pg_cursor.fetchone()
-                                    matched_suspect_name = row[0] if row else wl_id
+                                    # Subject deleted from Postgres but ghost remains in Milvus?
+                                    matched_suspect_name = wl_id
                                     matched_risk_level = "UNKNOWN"
                             except Exception as db_err:
                                 matched_suspect_name = wl_id
                                 print(f"⚠️  Database Fetch Error: {db_err}")
+                                raise db_err
                                 
                             print(f"[{cam_id}] 🚨 WATCHLIST HIT: {matched_suspect_name} (Distance: {wl_dist:.4f} | Thresh: {CURRENT_MATCH_THRESHOLD})")
                 except Exception as wl_err:
@@ -220,7 +225,8 @@ while True:
                         dist = top['distance']
                         
                         # ✅ USING DYNAMIC THRESHOLD FROM UI
-                        if dist < CURRENT_MATCH_THRESHOLD:
+                        # COSINE DISTANCE: match when dist is LOW (faces are similar).
+                        if dist < CURRENT_MATCH_THRESHOLD:  # dist < 0.35 by default
                             person_id = top['entity']['person_id']
                             is_match = True
                             final_match_distance = dist
@@ -233,16 +239,29 @@ while True:
                 person_id = f"P_{int(time.time() * 1000)}"
 
             # ==========================================================
-            # ⏱️ UNIVERSAL ANTI-SPAM COOLDOWN (Stops Alert Fatigue)
+            # ⏱️ SPLIT ANTI-SPAM COOLDOWNS (DB vs Alerts)
             # ==========================================================
-            cooldown_key = f"alert_cooldown_{person_id}"
-            
-            # If this person triggered an alert recently, skip processing entirely
-            if r.exists(cooldown_key):
+            system_status = r.get("system_armed")
+            is_armed = system_status is None or system_status.decode('utf-8') == "1"
+
+            # 1. DB Deduplication Lock (Always runs)
+            # Prevents saving the same person's face to Postgres/Milvus 30 times a second.
+            db_cooldown_key = f"db_cooldown_{person_id}"
+            if r.exists(db_cooldown_key):
                 continue 
-                
-            # Otherwise, set the lock for the configured window (60s)
-            r.setex(cooldown_key, DEDUP_WINDOW_SEC, "1")
+            r.setex(db_cooldown_key, DEDUP_WINDOW_SEC, "1")
+
+            # 2. Alert Deduplication Lock (Only locks if Armed)
+            # If the system is Disarmed, we DON'T set the alert lock. 
+            # This ensures that the very next frame after the Admin clicks "Arm System",
+            # the system immediately triggers the red modal.
+            alert_cooldown_key = f"alert_cooldown_{person_id}"
+            if is_armed:
+                if r.exists(alert_cooldown_key):
+                    # We only skip the WS broadcast if the alert lock is active AND we are armed
+                    pass
+                else:
+                    r.setex(alert_cooldown_key, DEDUP_WINDOW_SEC, "1")
             # ==========================================================
 
             # ── SAVE IMAGE TO DISK ──
@@ -254,21 +273,22 @@ while True:
             # Format path for React/FastAPI to serve (/images/...)
             relative_path = f"/images/{person_id}/{filename}"
 
-            # ── SAVE TO DATABASE (Only for non-watchlist sightings) ──
+            # ── SAVE TO DATABASE ──
+            # Milvus: Only store non-watchlist people (watchlist is already stored in a separate collection)
             if not is_watchlist_match:
                 milvus_client.insert(
                     collection_name=COLLECTION_NAME,
                     data=[{"person_id": person_id, "embedding": embedding}]
                 )
-                milvus_client.flush(collection_name=COLLECTION_NAME)
+                # Removed per-frame milvus_client.flush() to prevent severe performance bottlenecks
 
-                # Store raw path in DB for consistency with newapi.py mounts
-                db_path = f"/captured_faces/{person_id}/{filename}"
-                pg_cursor.execute(
-                    "INSERT INTO sightings (person_id, camera_id, timestamp, image_path) "
-                    "VALUES (%s, %s, %s, %s)",
-                    (person_id, cam_id, timestamp, db_path)
-                )
+            # PostgreSQL: ALWAYS store the physical sighting (for timelines/investigation)
+            db_path = f"/captured_faces/{person_id}/{filename}"
+            pg_cursor.execute(
+                "INSERT INTO sightings (person_id, camera_id, timestamp, image_path) "
+                "VALUES (%s, %s, %s, %s)",
+                (person_id, cam_id, timestamp, db_path)
+            )
 
             # ────────────────────────────────────────────────────────
             # 🚀 STAGE 3: PUSH TO REACT WEBSOCKETS
@@ -291,7 +311,8 @@ while True:
                 "person_id": str(person_id),
                 "timestamp": timestamp,
                 "live_image": relative_path,
-                "confidence": round(ui_confidence, 3) 
+                "confidence": round(ui_confidence, 3),
+                "is_armed": is_armed
             }
             
             if is_watchlist_match:
@@ -299,27 +320,22 @@ while True:
                 alert_payload["risk_level"] = matched_risk_level 
                 alert_payload["reference_image"] = f"/images/watchlist/{matched_watchlist_id}.jpg" 
 
-            # ==========================================
-            # 🚨 THE TACTICAL KILL SWITCH (ALERTS ONLY) 🚨
-            # ==========================================
-            system_status = r.get("system_armed")
-            
-            # Default to Armed ("1") if the key doesn't exist
-            if system_status is None or system_status.decode('utf-8') == "1":
-                # System is Armed: Broadcast to the React UI
+            # ALWAYS broadcast to React UI so the Sidebar "Live Intel Feed" keeps updating.
+            # We ONLY broadcast if the alert lock wasn't already active for this person.
+            if not is_armed or r.ttl(alert_cooldown_key) == DEDUP_WINDOW_SEC:
                 r_pub.publish("live_face_alerts", json.dumps(alert_payload))
                 
+            if is_armed:
                 if is_watchlist_match:
-                    print(f"[{cam_id}] 🚨 SENT TO UI -> WATCHLIST: {matched_suspect_name} ({matched_risk_level} RISK)")
+                    print(f"[{cam_id}] 🚨 ARMED WATCHLIST: {matched_suspect_name} ({matched_risk_level} RISK)")
                 else:
                     status_log = "MATCH ✅" if is_match else "NEW 🆕"
-                    print(f"[{cam_id}] 💾 {status_log}: {person_id} → {person_folder}")
+                    print(f"[{cam_id}] 💾 ARMED {status_log}: {person_id} → {person_folder}")
             else:
-                # System is Disarmed: Keep React UI quiet
                 if is_watchlist_match:
-                    print(f"[{cam_id}] 🔕 SILENT WATCHLIST: {matched_suspect_name} (UI Disarmed)")
+                    print(f"[{cam_id}] 🔕 DISARMED WATCHLIST: {matched_suspect_name} (UI Silent)")
                 else:
-                    status_log = "🔕 SILENT MATCH ✅" if is_match else "🔕 SILENT NEW 🆕"
+                    status_log = "🔕 DISARMED MATCH ✅" if is_match else "🔕 DISARMED NEW 🆕"
                     print(f"[{cam_id}] {status_log}: {person_id} → {person_folder}")
 
     except KeyboardInterrupt:

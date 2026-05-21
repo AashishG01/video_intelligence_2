@@ -7,27 +7,31 @@ import time
 import asyncio
 import json
 import psycopg2
+import shutil
 from psycopg2.extras import RealDictCursor
+from psycopg2.pool import ThreadedConnectionPool
 from pymilvus import MilvusClient
-from fastapi import FastAPI, UploadFile, File, Query, HTTPException, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, UploadFile, File, Form, Query, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
+from fastapi.security import OAuth2PasswordRequestForm
 from insightface.app import FaceAnalysis
 from datetime import datetime
 from pydantic import BaseModel
-from fastapi.security import OAuth2PasswordRequestForm
+from typing import List, Optional
 from auth import verify_password, get_password_hash, create_access_token, get_current_user, require_admin
-from pydantic import BaseModel as PydanticBaseModel
-from typing import List, Optional # Add this to your imports
-from fastapi import FastAPI, UploadFile, File, Query, HTTPException, WebSocket, Form, Depends
-import psycopg2
-import shutil # 👈 Ye import add kar lena top par
+from contextlib import asynccontextmanager
 
 # ==========================================
 # 1. SYSTEM SETUP
 # ==========================================
-app = FastAPI(title="C.O.R.E. Surveillance API", version="3.1")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    startup_db_check()
+    yield
+
+app = FastAPI(title="C.O.R.E. Surveillance API", version="3.1", lifespan=lifespan)
 
 # Allow React frontend to communicate with this API
 app.add_middleware(
@@ -73,8 +77,95 @@ print("⏳ Connecting to Milvus...")
 milvus_client = MilvusClient(uri="http://localhost:19530")
 COLLECTION_NAME = "face_embeddings"
 
-def get_pg_connection():
-    return psycopg2.connect(dbname="surveillance", user="admin", password="password", host="localhost", port="5432")
+# ==========================================
+# PostgreSQL CONNECTION POOL
+# ==========================================
+# Opens a fixed pool of persistent connections at startup.
+# Each request borrows one connection and returns it when done —
+# no TCP handshake overhead per request, no risk of exhausting
+# PostgreSQL's max_connections limit under concurrent load.
+#
+# minconn=2  — always keep 2 connections warm (instant availability)
+# maxconn=10 — hard ceiling; requests block if all 10 are in use
+#              rather than spawning unlimited raw connections.
+#
+# ⚠️ DB credentials below should also be moved to env vars
+#    (see notes.md § Known Issues #5 / BUG-005 tracking item).
+_PG_DSN = dict(
+    dbname="surveillance",
+    user="admin",
+    password="password",
+    host="localhost",
+    port="5432",
+)
+
+print("⏳ Initialising PostgreSQL connection pool (2–10 connections)...")
+_pg_pool = ThreadedConnectionPool(minconn=2, maxconn=10, **_PG_DSN)
+print("✅ PostgreSQL pool ready.")
+
+
+class _PooledConn:
+    """
+    Thin wrapper around a psycopg2 connection borrowed from _pg_pool.
+
+    Calling .close() on this object returns the connection to the pool
+    rather than destroying it, so all existing `conn.close()` call sites
+    throughout the file work correctly with zero modifications.
+
+    Also supports the context-manager protocol:
+        with get_pg_connection() as conn:
+            cursor = conn.cursor()
+            ...
+    The connection is returned to the pool automatically on exit,
+    with rollback on exception.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    # ── Core connection methods ──
+    def cursor(self, *args, **kwargs):
+        return self._conn.cursor(*args, **kwargs)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def rollback(self):
+        return self._conn.rollback()
+
+    @property
+    def autocommit(self):
+        return self._conn.autocommit
+
+    @autocommit.setter
+    def autocommit(self, value):
+        self._conn.autocommit = value
+
+    def close(self):
+        """Return this connection to the pool (does NOT destroy it)."""
+        _pg_pool.putconn(self._conn)
+
+    # ── Context-manager support ──
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
+        self.close()
+        return False  # do not suppress exceptions
+
+    # ── Forward any other attribute access to the real connection ──
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def get_pg_connection() -> _PooledConn:
+    """Borrow a connection from the pool. Always call conn.close() when done."""
+    return _PooledConn(_pg_pool.getconn())
 
 # ==========================================
 # 3. AI MODEL (FOR UPLOAD SEARCH ONLY)
@@ -157,17 +248,19 @@ async def live_alerts_websocket(websocket: WebSocket):
             await asyncio.sleep(0.05) 
     except WebSocketDisconnect:
         print("Frontend disconnected from WebSocket.")
+    finally:
         pubsub.unsubscribe()
+        pubsub.close()
 
 # ==========================================
 # 5. LIVE VIDEO STREAM ROUTE
 # ==========================================
-def generate_mjpeg(cam_id):
+async def generate_mjpeg(cam_id):
     """Pulls the latest frame from Redis for the UI."""
     while True:
         frame_b64 = r_bytes.get(f"latest_frame_{cam_id}")
         if not frame_b64:
-            time.sleep(0.1)
+            await asyncio.sleep(0.1)
             continue
         img_bytes = base64.b64decode(frame_b64)
         yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + img_bytes + b'\r\n')
@@ -195,10 +288,10 @@ async def get_system_stats():
     cursor.execute("SELECT COUNT(DISTINCT person_id) as suspects FROM sightings")
     unique_suspects = cursor.fetchone()['suspects']
     
-    cursor.execute("SELECT COUNT(DISTINCT camera_id) as cameras FROM sightings")
+    cursor.execute("SELECT COUNT(id) as cameras FROM cameras WHERE is_active = TRUE")
     active_cameras = cursor.fetchone()['cameras']
     
-    cursor.execute("SELECT DISTINCT camera_id FROM sightings")
+    cursor.execute("SELECT camera_id FROM cameras WHERE is_active = TRUE")
     camera_ids = [row['camera_id'] for row in cursor.fetchall()]
     
     cursor.execute("SELECT MIN(timestamp) as start_time FROM sightings")
@@ -218,7 +311,6 @@ async def get_system_stats():
         "system_start_time": start_time_str
     }
 
-@app.on_event("startup")
 def startup_db_check():
     """Ensures that PostgreSQL tables and Milvus collections exist on startup."""
     print("⏳ Running Auto-Database Check...")
@@ -228,6 +320,19 @@ def startup_db_check():
         conn = get_pg_connection()
         conn.autocommit = True
         cursor = conn.cursor()
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cameras (
+                id SERIAL PRIMARY KEY,
+                camera_id VARCHAR(50) UNIQUE NOT NULL,
+                camera_name VARCHAR(100) NOT NULL,
+                place VARCHAR(100),
+                rtsp_url TEXT NOT NULL,
+                fps_limit INTEGER DEFAULT 1,
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
         
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS sightings (
@@ -241,16 +346,7 @@ def startup_db_check():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON sightings(timestamp);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_person_id ON sightings(person_id);")
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS watchlist (
-                id SERIAL PRIMARY KEY,
-                watchlist_id VARCHAR(100) UNIQUE NOT NULL,
-                name VARCHAR(200) NOT NULL,
-                image_path TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_id ON watchlist(watchlist_id);")
+        # Legacy watchlist table removed to prevent Split-Brain Architecture
         
         cursor.close()
         conn.close()
@@ -293,133 +389,8 @@ def startup_db_check():
 # ==========================================
 WATCHLIST_COLLECTION = "watchlist_faces"
 
-# Save watchlist images in a subfolder
-WATCHLIST_FOLDER = os.path.join(SAVE_FOLDER, "watchlist")
-os.makedirs(WATCHLIST_FOLDER, exist_ok=True)
-
-@app.post("/api/watchlist/add")
-async def add_to_watchlist(
-    file: UploadFile = File(...),
-    name: str = Query("Unknown Suspect", description="Name of the suspect"),
-    admin_user: dict = Depends(require_admin) # <-- ADD THIS LINE
-):
-    """Enrolls a new suspect into the Watchlist (Milvus + PostgreSQL)."""
-    contents = await file.read()
-    nparr = np.frombuffer(contents, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-    faces = face_app.get(img)
-    if not faces:
-        raise HTTPException(status_code=400, detail="No face detected in uploaded image.")
-
-    # Pick the largest face
-    faces = sorted(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]), reverse=True)
-    suspect_embedding = faces[0].embedding.tolist()
-
-    watchlist_id = f"WL_{int(time.time() * 1000)}"
-    filename = f"{watchlist_id}.jpg"
-    filepath = os.path.join(WATCHLIST_FOLDER, filename)
-    cv2.imwrite(filepath, img)
-
-    # Insert embedding into Milvus watchlist collection
-    try:
-        milvus_client.load_collection(WATCHLIST_COLLECTION)
-    except Exception:
-        pass
-    milvus_client.insert(
-        collection_name=WATCHLIST_COLLECTION,
-        data=[{"watchlist_id": watchlist_id, "embedding": suspect_embedding}]
-    )
-    milvus_client.flush(collection_name=WATCHLIST_COLLECTION)
-
-    # Insert metadata into PostgreSQL
-    conn = get_pg_connection()
-    cursor = conn.cursor()
-    image_path = f"/images/watchlist/{filename}"
-    cursor.execute(
-        "INSERT INTO watchlist (watchlist_id, name, image_path) VALUES (%s, %s, %s)",
-        (watchlist_id, name, image_path)
-    )
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-    return {
-        "status": "Suspect Enrolled",
-        "watchlist_id": watchlist_id,
-        "name": name,
-        "image_url": image_path
-    }
-
-@app.get("/api/watchlist/list")
-async def list_watchlist():
-    """Returns all enrolled suspects from the Watchlist."""
-    conn = get_pg_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT watchlist_id, name, image_path, created_at FROM watchlist ORDER BY created_at DESC")
-    records = cursor.fetchall()
-    cursor.close()
-    conn.close()
-
-    suspects = []
-    for rec in records:
-        suspects.append({
-            "watchlist_id": rec["watchlist_id"],
-            "name": rec["name"],
-            "image_url": rec["image_path"],
-            "created_at": str(rec["created_at"])
-        })
-
-    return {"total": len(suspects), "suspects": suspects}
-
-@app.delete("/api/watchlist/remove/{watchlist_id}")
-async def remove_from_watchlist(
-    watchlist_id: str,
-    admin_user: dict = Depends(require_admin) # <-- ADD THIS LINE
-):
-    """Removes a suspect from both Milvus and PostgreSQL."""
-    # Remove from PostgreSQL
-    conn = get_pg_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM watchlist WHERE watchlist_id = %s", (watchlist_id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-    # Remove from Milvus
-    try:
-        milvus_client.load_collection(WATCHLIST_COLLECTION)
-        milvus_client.delete(
-            collection_name=WATCHLIST_COLLECTION,
-            filter=f'watchlist_id == "{watchlist_id}"'
-        )
-    except Exception as e:
-        print(f"⚠️ Milvus delete warning: {e}")
-
-    # Deactivate if this ID was in the active list
-    active_raw = r.get("ACTIVE_WATCHLIST")
-    if active_raw:
-        try:
-            active_ids = json.loads(active_raw)
-            if watchlist_id in active_ids:
-                active_ids.remove(watchlist_id)
-                r.set("ACTIVE_WATCHLIST", json.dumps(active_ids))
-        except Exception:
-            pass
-
-    return {"status": "Suspect Removed", "watchlist_id": watchlist_id}
-
-@app.post("/api/watchlist/activate")
-async def activate_watchlist_search(ids: list[str]):
-    """Writes the selected suspect IDs to Redis for the AI Worker to scan against."""
-    r.set("ACTIVE_WATCHLIST", json.dumps(ids))
-    return {"status": "Search Activated", "active_targets": ids, "count": len(ids)}
-
-@app.delete("/api/watchlist/deactivate")
-async def deactivate_watchlist_search():
-    """Clears the active search."""
-    r.delete("ACTIVE_WATCHLIST")
-    return {"status": "Search Deactivated"}
+# Legacy /api/watchlist/* endpoints have been permanently deleted.
+# The system now strictly uses the enterprise /api/subjects/* endpoints.
 
 # ==========================================
 # 8. SEARCH BY IMAGE
@@ -448,8 +419,9 @@ async def search_by_image(
             output_fields=["person_id"],
             search_params={"metric_type": "COSINE"}
         )
-    except Exception:
-        return {"suspect_found": False, "total_sightings": 0, "sightings": []}
+    except Exception as e:
+        print(f"⚠️ Milvus search error: {e}")
+        raise HTTPException(status_code=500, detail="Database search failed.")
 
     if not search_res or len(search_res[0]) == 0:
         return {"suspect_found": False, "total_sightings": 0, "sightings": []}
@@ -598,13 +570,16 @@ async def list_subjects(current_user: dict = Depends(get_current_user)):
         SELECT s.id, s.subject_uuid, s.full_name, s.age, s.gender,
                s.occupation, s.physical_description as description,
                s.risk_level, s.created_at,
-               -- Aggregate categories into a JSON array for the frontend
-               json_agg(json_build_object('name', c.name, 'color', c.color_code)) as categories,
+               COALESCE(
+                   json_agg(
+                       json_build_object('name', c.name, 'color', c.color_code)
+                   ) FILTER (WHERE c.id IS NOT NULL), 
+                   '[]'
+               ) as categories,
                '/images/watchlist/' || s.subject_uuid || '.jpg' as image_url
         FROM subjects s
-        JOIN watchlist_members wm ON s.id = wm.subject_id
-        JOIN watchlist_categories c ON wm.category_id = c.id
-        WHERE wm.is_active = TRUE
+        LEFT JOIN watchlist_members wm ON s.id = wm.subject_id AND wm.is_active = TRUE
+        LEFT JOIN watchlist_categories c ON wm.category_id = c.id
         GROUP BY s.id
         ORDER BY s.created_at DESC
     """)
@@ -870,6 +845,7 @@ def update_alert_settings(settings: AlertSettingsConfig):
             print("✅ Redis Updated Successfully!")
         except Exception as redis_err:
             print(f"❌ Redis Update Failed: {redis_err}")
+            raise HTTPException(status_code=500, detail="Failed to update cache settings")
 
         # 2. PHIR POSTGRES MEIN SAVE KARO (Permanent storage)
         try:
@@ -901,8 +877,7 @@ def update_alert_settings(settings: AlertSettingsConfig):
             print("✅ Postgres Updated Successfully!")
         except Exception as pg_err:
             print(f"❌ Postgres Update Failed: {pg_err}")
-            # Hum fail nahi karenge, kyunki Redis update ho chuka hai
-            pass
+            raise HTTPException(status_code=500, detail="Failed to update database settings")
 
         return {"message": "Configuration deployed successfully", "status": "success"}
     
@@ -912,6 +887,64 @@ def update_alert_settings(settings: AlertSettingsConfig):
     
 # ==========================================
 # POST: UPLOAD CUSTOM AUDIO FILE
+# ==========================================
+# CAMERA MANAGEMENT APIs
+# ==========================================
+from pydantic import BaseModel, Field
+import psycopg2
+
+class CameraConfig(BaseModel):
+    camera_id: str
+    camera_name: str
+    place: str = ""
+    rtsp_url: str
+    fps_limit: int = Field(default=1, ge=1, le=30, description="Frames per second limit (1-30)")
+
+@app.get("/api/cameras")
+async def get_cameras():
+    conn = get_pg_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute("SELECT id, camera_id, camera_name, place, rtsp_url, fps_limit, is_active FROM cameras ORDER BY created_at DESC")
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.post("/api/cameras/add")
+async def add_camera(cam: CameraConfig, admin_user: dict = Depends(require_admin)):
+    conn = get_pg_connection()
+    cursor = conn.cursor()
+    try:
+        # We explicitly do NOT use ON CONFLICT DO UPDATE to prevent silent overwrites.
+        cursor.execute("""
+            INSERT INTO cameras (camera_id, camera_name, place, rtsp_url, fps_limit, is_active)
+            VALUES (%s, %s, %s, %s, %s, TRUE)
+        """, (cam.camera_id, cam.camera_name, cam.place, cam.rtsp_url, cam.fps_limit))
+        conn.commit()
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail="Camera ID already exists. Please use a unique ID or delete the existing one first.")
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+    return {"status": "success", "message": "Camera enrolled successfully"}
+
+@app.delete("/api/cameras/remove/{camera_id}")
+async def remove_camera(camera_id: str, admin_user: dict = Depends(require_admin)):
+    conn = get_pg_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM cameras WHERE camera_id = %s", (camera_id,))
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+    return {"status": "success", "message": f"Camera {camera_id} deleted"}
+
 # ==========================================
 @app.post("/api/settings/upload_audio")
 async def upload_custom_audio(file: UploadFile = File(...)):
