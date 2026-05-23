@@ -44,14 +44,5 @@ paths:
   # ==========================================
   # ⬇️ ADD NEW CAMERAS FROM THE UI BELOW ⬇️
   # ==========================================
-  # Replace 'your_camera_id' with the exact ID you typed in the React UI!
-  # Example:
-  # gate_cam:
-  #   source: rtsp://your_new_camera_ip:554/stream
-  #   sourceProtocol: tcp
-  #   sourceOnDemand: no
-  
-  your_camera_id_here:
-    source: rtsp://127.0.0.1:8554/test
-    sourceProtocol: tcp
-    sourceOnDemand: no
+  # Because we enabled the API above, you NO LONGER need to edit this file!
+  # The Python backend will dynamically program MediaMTX on the fly!

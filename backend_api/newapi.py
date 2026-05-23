@@ -904,7 +904,8 @@ def sync_camera_to_mediamtx(camera_id: str, rtsp_url: str):
             json={
                 "source": rtsp_url,
                 "sourceProtocol": "tcp",
-                "sourceOnDemand": False
+                "sourceOnDemand": False,
+                "sourceDisableAudio": True
             },
             timeout=5
         )
