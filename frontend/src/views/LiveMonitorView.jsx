@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MonitorPlay, AlertCircle, RefreshCw, User } from 'lucide-react';
-import { MEDIAMTX_URL, getImageUrl } from '../config';
+import { BACKEND_URL, MEDIAMTX_URL, getImageUrl } from '../config';
 
 // ================================
 // WebRTC Player Component
@@ -88,16 +88,32 @@ const WebRTCPlayer = ({ camId, label, onError }) => {
 // ================================
 const LiveMonitorView = ({ liveAlerts }) => {
 
-    const cameras = [
-        { id: "cam1", label: "Lab cam 1" },
-        { id: "cam2", label: "Lab cam 2" },
-        { id: "cam3", label: "Lab cam 3" },
-        { id: "cam4", label: "Dept gate Cam" },
-    ];
+    const [cameras, setCameras] = useState([]);
+    const [camStatus, setCamStatus] = useState({});
 
-    const [camStatus, setCamStatus] = useState({
-        cam1: true, cam2: true, cam3: true, cam4: true
-    });
+    // Fetch dynamic cameras from PostgreSQL backend
+    useEffect(() => {
+        const fetchCameras = async () => {
+            try {
+                const res = await fetch(`${BACKEND_URL}/api/cameras`);
+                if (res.ok) {
+                    const data = await res.json();
+                    const activeCams = data.filter(c => c.is_active).map(c => ({
+                        id: c.camera_id,
+                        label: c.camera_name
+                    }));
+                    setCameras(activeCams);
+                    
+                    const statusObj = {};
+                    activeCams.forEach(c => statusObj[c.id] = true);
+                    setCamStatus(statusObj);
+                }
+            } catch (err) {
+                console.error("Failed to load dynamic cameras:", err);
+            }
+        };
+        fetchCameras();
+    }, []);
 
     const [selectedCam, setSelectedCam] = useState(null);
 
@@ -140,7 +156,7 @@ const LiveMonitorView = ({ liveAlerts }) => {
                 </div>
 
                 {/* CAMERA GRID */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className={`grid ${cameras.length === 1 ? 'grid-cols-1' : cameras.length <= 4 ? 'grid-cols-2' : cameras.length <= 9 ? 'grid-cols-3' : 'grid-cols-4'} gap-4`}>
                     {cameras.map((cam) => (
                         <div
                             key={cam.id}
