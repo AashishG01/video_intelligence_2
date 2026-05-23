@@ -896,58 +896,84 @@ import requests as http_requests
 
 MEDIAMTX_API = "http://localhost:9997"
 
+import yaml
+
+def append_to_mediamtx_yml(camera_id: str, rtsp_url: str):
+    """Fallback: Physically edits the mediamtx.yml file if the API is locked."""
+    try:
+        yml_path = "../mediamtx.yml"
+        with open(yml_path, "r") as f:
+            config = yaml.safe_load(f) or {}
+            
+        if "paths" not in config:
+            config["paths"] = {}
+            
+        config["paths"][camera_id] = {
+            "source": rtsp_url,
+            "sourceProtocol": "tcp",
+            "sourceOnDemand": False
+        }
+        
+        with open(yml_path, "w") as f:
+            yaml.dump(config, f, default_flow_style=False)
+            
+        print(f"✅ FILE SYNC: '{camera_id}' automatically written to mediamtx.yml! (Restart MediaMTX to apply)")
+    except Exception as e:
+        print(f"❌ FILE SYNC FAILED: Could not edit mediamtx.yml manually. Error: {e}")
+
+def remove_from_mediamtx_yml(camera_id: str):
+    """Fallback: Physically removes the camera from mediamtx.yml."""
+    try:
+        yml_path = "../mediamtx.yml"
+        with open(yml_path, "r") as f:
+            config = yaml.safe_load(f) or {}
+            
+        if "paths" in config and camera_id in config["paths"]:
+            del config["paths"][camera_id]
+            with open(yml_path, "w") as f:
+                yaml.dump(config, f, default_flow_style=False)
+            print(f"🗑️ FILE SYNC: '{camera_id}' removed from mediamtx.yml")
+    except Exception as e:
+        print(f"❌ FILE SYNC FAILED: Could not delete from mediamtx.yml manually. Error: {e}")
+
 def sync_camera_to_mediamtx(camera_id: str, rtsp_url: str):
     """Tell MediaMTX to start routing this RTSP stream via WebRTC."""
     payload = {
         "source": rtsp_url,
-        "rtspTransport": "tcp"       # FIXED: 'sourceProtocol' is deprecated
+        "rtspTransport": "tcp"
     }
     print(f"📡 Sending command to MediaMTX for '{camera_id}'...")
     try:
-        res = http_requests.post(
-            f"{MEDIAMTX_API}/v3/config/paths/add/{camera_id}",
-            json=payload,
-            timeout=5
-        )
+        res = http_requests.post(f"{MEDIAMTX_API}/v3/config/paths/{camera_id}", json=payload, timeout=3)
         if res.status_code == 200:
             print(f"✅ MediaMTX: Route created for '{camera_id}'")
+            return
+        elif res.status_code == 401:
+            print("⚠️ API is locked (401). Falling back to direct file edit...")
+            append_to_mediamtx_yml(camera_id, rtsp_url)
         else:
-            print(f"❌ MediaMTX REJECTED (add endpoint)! Code: {res.status_code}, Body: {res.text}")
-            # Fallback: Try without /add/ (newer MediaMTX versions)
-            res2 = http_requests.post(
-                f"{MEDIAMTX_API}/v3/config/paths/{camera_id}",
-                json=payload,
-                timeout=5
-            )
-            if res2.status_code == 200:
-                print(f"✅ MediaMTX: Route created for '{camera_id}' (via fallback endpoint)")
-            else:
-                print(f"❌ MediaMTX fallback also REJECTED! Code: {res2.status_code}, Body: {res2.text}")
+            print(f"❌ MediaMTX REJECTED! Code: {res.status_code}. Falling back to file edit...")
+            append_to_mediamtx_yml(camera_id, rtsp_url)
     except Exception as e:
-        print(f"❌ CRITICAL: FastAPI could not reach MediaMTX API. Is port 9997 open? Error: {e}")
+        print("⚠️ API Unreachable. Falling back to direct file edit...")
+        append_to_mediamtx_yml(camera_id, rtsp_url)
 
 def remove_camera_from_mediamtx(camera_id: str):
     """Tell MediaMTX to stop routing this camera's stream."""
     print(f"🗑️ Removing '{camera_id}' from MediaMTX...")
     try:
-        res = http_requests.delete(
-            f"{MEDIAMTX_API}/v3/config/paths/delete/{camera_id}",
-            timeout=5
-        )
+        res = http_requests.delete(f"{MEDIAMTX_API}/v3/config/paths/{camera_id}", timeout=3)
         if res.status_code == 200:
             print(f"✅ MediaMTX: Route deleted for '{camera_id}'")
+        elif res.status_code == 401:
+            print("⚠️ API is locked (401). Falling back to direct file edit...")
+            remove_from_mediamtx_yml(camera_id)
         else:
-            # Fallback: Try without /delete/ (newer MediaMTX versions)
-            res2 = http_requests.delete(
-                f"{MEDIAMTX_API}/v3/config/paths/{camera_id}",
-                timeout=5
-            )
-            if res2.status_code == 200:
-                print(f"✅ MediaMTX: Route deleted for '{camera_id}' (via fallback endpoint)")
-            else:
-                print(f"❌ MediaMTX delete failed! Code: {res2.status_code}, Body: {res2.text}")
+            print(f"❌ MediaMTX delete failed! Code: {res.status_code}. Falling back to file edit...")
+            remove_from_mediamtx_yml(camera_id)
     except Exception as e:
-        print(f"❌ CRITICAL: Could not reach MediaMTX API for deletion. Error: {e}")
+        print("⚠️ API Unreachable. Falling back to direct file edit...")
+        remove_from_mediamtx_yml(camera_id)
 
 class CameraConfig(BaseModel):
     camera_id: str
