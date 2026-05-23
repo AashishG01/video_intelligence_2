@@ -896,12 +896,18 @@ import requests as http_requests
 
 MEDIAMTX_API = "http://localhost:9997"
 
+import os
 import yaml
+
+def get_mediamtx_yml_path():
+    """Dynamically get the absolute path to mediamtx.yml at the project root."""
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_dir, "mediamtx.yml")
 
 def append_to_mediamtx_yml(camera_id: str, rtsp_url: str):
     """Fallback: Physically edits the mediamtx.yml file if the API is locked."""
     try:
-        yml_path = "../mediamtx.yml"
+        yml_path = get_mediamtx_yml_path()
         with open(yml_path, "r") as f:
             config = yaml.safe_load(f) or {}
             
@@ -925,7 +931,7 @@ def append_to_mediamtx_yml(camera_id: str, rtsp_url: str):
 def remove_from_mediamtx_yml(camera_id: str):
     """Fallback: Physically removes the camera from mediamtx.yml."""
     try:
-        yml_path = "../mediamtx.yml"
+        yml_path = get_mediamtx_yml_path()
         with open(yml_path, "r") as f:
             config = yaml.safe_load(f) or {}
             
