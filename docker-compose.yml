@@ -73,6 +73,7 @@ services:
       - "8889:8889" # WebRTC HTTP server
       - "8554:8554" # RTSP
       - "8189:8189/udp" # WebRTC core
+      - "9997:9997" # REST API for dynamic camera management
     volumes:
       - ./mediamtx.yml:/mediamtx.yml
 

@@ -892,6 +892,36 @@ def update_alert_settings(settings: AlertSettingsConfig):
 # ==========================================
 from pydantic import BaseModel, Field
 import psycopg2
+import requests as http_requests
+
+MEDIAMTX_API = "http://localhost:9997"
+
+def sync_camera_to_mediamtx(camera_id: str, rtsp_url: str):
+    """Tell MediaMTX to start routing this RTSP stream via WebRTC."""
+    try:
+        http_requests.post(
+            f"{MEDIAMTX_API}/v3/config/paths/add/{camera_id}",
+            json={
+                "source": rtsp_url,
+                "sourceProtocol": "tcp",
+                "sourceOnDemand": False
+            },
+            timeout=5
+        )
+        print(f"✅ MediaMTX: Route created for '{camera_id}'")
+    except Exception as e:
+        print(f"⚠️ MediaMTX sync failed for '{camera_id}': {e}")
+
+def remove_camera_from_mediamtx(camera_id: str):
+    """Tell MediaMTX to stop routing this camera's stream."""
+    try:
+        http_requests.delete(
+            f"{MEDIAMTX_API}/v3/config/paths/delete/{camera_id}",
+            timeout=5
+        )
+        print(f"🗑️ MediaMTX: Route deleted for '{camera_id}'")
+    except Exception as e:
+        print(f"⚠️ MediaMTX route deletion failed for '{camera_id}': {e}")
 
 class CameraConfig(BaseModel):
     camera_id: str
@@ -931,7 +961,11 @@ async def add_camera(cam: CameraConfig, admin_user: dict = Depends(require_admin
     finally:
         cursor.close()
         conn.close()
-    return {"status": "success", "message": "Camera enrolled successfully"}
+    
+    # Dynamically program MediaMTX to start routing this RTSP stream
+    sync_camera_to_mediamtx(cam.camera_id, cam.rtsp_url)
+    
+    return {"status": "success", "message": "Camera enrolled and video route created"}
 
 @app.delete("/api/cameras/remove/{camera_id}")
 async def remove_camera(camera_id: str, admin_user: dict = Depends(require_admin)):
@@ -943,7 +977,11 @@ async def remove_camera(camera_id: str, admin_user: dict = Depends(require_admin
     finally:
         cursor.close()
         conn.close()
-    return {"status": "success", "message": f"Camera {camera_id} deleted"}
+    
+    # Dynamically remove the route from MediaMTX
+    remove_camera_from_mediamtx(camera_id)
+    
+    return {"status": "success", "message": f"Camera {camera_id} deleted and video route removed"}
 
 # ==========================================
 @app.post("/api/settings/upload_audio")

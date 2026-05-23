@@ -10,6 +10,11 @@ rtsp: yes
 hls: no
 rtmp: no
 
+# Enable REST API for dynamic camera management
+# FastAPI will use this to add/remove paths on the fly
+api: yes
+apiAddress: :9997
+
 # Default paths
 paths:
   # Camera 1 Setup

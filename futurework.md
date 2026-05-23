@@ -19,4 +19,4 @@ We have to create an end to end application based on the webserver server based
 -> Anti Duplication if we are adding same people twice so system should check and inform 
 -> Creating a HitList of all the people matched recently or queue it on the basis of matched system
 -> Adding visual color coding to watchlist and people 
--> Feature: Dynamic MediaMTX API Synchronization. Instead of manually editing mediamtx.yml, FastAPI should use the MediaMTX REST API (port 9997) to dynamically add/remove RTSP routing paths whenever a camera is enrolled or deleted in the PostgreSQL database.
+-> Feature: Dynamic MediaMTX API Synchronization. Instead of manually editing mediamtx.yml, FastAPI should use the MediaMTX REST API (port 9997) to dynamically add/remove RTSP routing paths whenever a camera is enrolled or deleted in the PostgreSQL database. --> done
