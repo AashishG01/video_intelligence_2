@@ -898,31 +898,56 @@ MEDIAMTX_API = "http://localhost:9997"
 
 def sync_camera_to_mediamtx(camera_id: str, rtsp_url: str):
     """Tell MediaMTX to start routing this RTSP stream via WebRTC."""
+    payload = {
+        "source": rtsp_url,
+        "rtspTransport": "tcp"       # FIXED: 'sourceProtocol' is deprecated
+    }
+    print(f"📡 Sending command to MediaMTX for '{camera_id}'...")
     try:
-        http_requests.post(
+        res = http_requests.post(
             f"{MEDIAMTX_API}/v3/config/paths/add/{camera_id}",
-            json={
-                "source": rtsp_url,
-                "sourceProtocol": "tcp",
-                "sourceOnDemand": False,
-                "sourceDisableAudio": True
-            },
+            json=payload,
             timeout=5
         )
-        print(f"✅ MediaMTX: Route created for '{camera_id}'")
+        if res.status_code == 200:
+            print(f"✅ MediaMTX: Route created for '{camera_id}'")
+        else:
+            print(f"❌ MediaMTX REJECTED (add endpoint)! Code: {res.status_code}, Body: {res.text}")
+            # Fallback: Try without /add/ (newer MediaMTX versions)
+            res2 = http_requests.post(
+                f"{MEDIAMTX_API}/v3/config/paths/{camera_id}",
+                json=payload,
+                timeout=5
+            )
+            if res2.status_code == 200:
+                print(f"✅ MediaMTX: Route created for '{camera_id}' (via fallback endpoint)")
+            else:
+                print(f"❌ MediaMTX fallback also REJECTED! Code: {res2.status_code}, Body: {res2.text}")
     except Exception as e:
-        print(f"⚠️ MediaMTX sync failed for '{camera_id}': {e}")
+        print(f"❌ CRITICAL: FastAPI could not reach MediaMTX API. Is port 9997 open? Error: {e}")
 
 def remove_camera_from_mediamtx(camera_id: str):
     """Tell MediaMTX to stop routing this camera's stream."""
+    print(f"🗑️ Removing '{camera_id}' from MediaMTX...")
     try:
-        http_requests.delete(
+        res = http_requests.delete(
             f"{MEDIAMTX_API}/v3/config/paths/delete/{camera_id}",
             timeout=5
         )
-        print(f"🗑️ MediaMTX: Route deleted for '{camera_id}'")
+        if res.status_code == 200:
+            print(f"✅ MediaMTX: Route deleted for '{camera_id}'")
+        else:
+            # Fallback: Try without /delete/ (newer MediaMTX versions)
+            res2 = http_requests.delete(
+                f"{MEDIAMTX_API}/v3/config/paths/{camera_id}",
+                timeout=5
+            )
+            if res2.status_code == 200:
+                print(f"✅ MediaMTX: Route deleted for '{camera_id}' (via fallback endpoint)")
+            else:
+                print(f"❌ MediaMTX delete failed! Code: {res2.status_code}, Body: {res2.text}")
     except Exception as e:
-        print(f"⚠️ MediaMTX route deletion failed for '{camera_id}': {e}")
+        print(f"❌ CRITICAL: Could not reach MediaMTX API for deletion. Error: {e}")
 
 class CameraConfig(BaseModel):
     camera_id: str
