@@ -910,7 +910,8 @@ def append_to_mediamtx_yml(camera_id: str, rtsp_url: str):
             
         config["paths"][camera_id] = {
             "source": rtsp_url,
-            "sourceProtocol": "tcp",
+            "rtspTransport": "tcp",
+            "sourceDisableAudio": True,
             "sourceOnDemand": False
         }
         
