@@ -15,34 +15,7 @@ rtmp: no
 api: yes
 apiAddress: :9997
 
-# Default paths
+# All camera paths are now managed dynamically by the FastAPI backend
+# via the REST API on port 9997. No manual entries needed here.
 paths:
-  # Camera 1 Setup
-  cam1:
-    source: rtsp://admin:admin@172.16.0.151:554/live.sdp
-    sourceProtocol: tcp
-    sourceOnDemand: no
-
-  # Camera 2 Setup
-  cam2:
-    source: rtsp://admin:admin@172.16.0.152:554/live.sdp
-    sourceProtocol: tcp
-    sourceOnDemand: no
-
-  # Camera 3 Setup
-  cam3:
-    source: rtsp://admin:123456@172.16.0.161:554/live.sdp
-    sourceProtocol: tcp
-    sourceOnDemand: no
-
-  # Camera 4 Setup
-  cam4:
-    source: rtsp://admin:Admin%40123@172.16.0.162:554/live.sdp
-    sourceProtocol: tcp
-    sourceOnDemand: no
-
-  # ==========================================
-  # ⬇️ ADD NEW CAMERAS FROM THE UI BELOW ⬇️
-  # ==========================================
-  # Because we enabled the API above, you NO LONGER need to edit this file!
-  # The Python backend will dynamically program MediaMTX on the fly!
+  all_others:
