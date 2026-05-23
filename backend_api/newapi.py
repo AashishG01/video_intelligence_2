@@ -1,3 +1,4 @@
+from pydantic import BaseModel, Field
 import os
 import cv2
 import numpy as np
@@ -18,7 +19,6 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from insightface.app import FaceAnalysis
 from datetime import datetime
-from pydantic import BaseModel
 from typing import List, Optional
 from auth import verify_password, get_password_hash, create_access_token, get_current_user, require_admin
 from contextlib import asynccontextmanager
@@ -521,7 +521,7 @@ async def get_categories(current_user: dict = Depends(get_current_user)):
     cursor.close(); conn.close()
     return cats
 
-class CategoryData(PydanticBaseModel):
+class CategoryData(BaseModel):
     name: str
     color_code: str = "#3b82f6"
     description: str = ""
