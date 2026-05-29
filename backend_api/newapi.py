@@ -881,9 +881,12 @@ def update_alert_settings(settings: AlertSettingsConfig):
 
         return {"message": "Configuration deployed successfully", "status": "success"}
     
+    except HTTPException:
+        # Let FastAPI handle these with the correct status code (e.g. 500)
+        raise
     except Exception as e:
         print(f"❌ Critical API Error in Alert Settings: {e}")
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
     
 # ==========================================
 # POST: UPLOAD CUSTOM AUDIO FILE

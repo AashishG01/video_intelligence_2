@@ -188,6 +188,9 @@ while True:
                             final_match_distance = wl_dist
                             
                             # Fetch suspect real name & risk level from PostgreSQL
+                            # NOTE: DB errors are intentionally NOT caught here — they
+                            # must propagate to the outer loop's auto-recovery handler
+                            # so that a dead PG connection triggers reconnection logic.
                             try:
                                 pg_cursor.execute("SELECT full_name, risk_level FROM subjects WHERE subject_uuid = %s", (wl_id,))
                                 row = pg_cursor.fetchone()
@@ -201,9 +204,13 @@ while True:
                             except Exception as db_err:
                                 matched_suspect_name = wl_id
                                 print(f"⚠️  Database Fetch Error: {db_err}")
-                                raise db_err
+                                raise  # Propagate past the watchlist handler for auto-recovery
                                 
                             print(f"[{cam_id}] 🚨 WATCHLIST HIT: {matched_suspect_name} (Distance: {wl_dist:.4f} | Thresh: {CURRENT_MATCH_THRESHOLD})")
+                except (psycopg2.Error, OSError) as db_propagated_err:
+                    # DB/connection errors must NOT be swallowed — re-raise so the
+                    # outer loop's self-healing block can reconnect to PostgreSQL.
+                    raise
                 except Exception as wl_err:
                     print(f"⚠️ Watchlist search error: {wl_err}")
 

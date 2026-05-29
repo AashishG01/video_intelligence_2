@@ -68,5 +68,8 @@ while True:
               f"Total Passed: {frames_passed} | "
               f"Total Dropped: {frames_rejected}")
 
+    except KeyboardInterrupt:
+        print("\n🛑 YOLO Worker stopped by user.")
+        break
     except Exception as e:
         print(f"⚠️ YOLO Error: {e}")

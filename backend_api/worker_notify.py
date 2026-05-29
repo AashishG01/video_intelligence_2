@@ -57,7 +57,7 @@ def send_threat_email(alert_data, recipient_emails):
     html_body = f"""
     <html>
         <body style="font-family: Arial, sans-serif; background-color: #020617; color: #f8fafc; padding: 20px;">
-            <div style="max-w: 600px; margin: auto; border: 2px solid #ef4444; border-radius: 12px; background-color: #0f172a; overflow: hidden;">
+            <div style="max-width: 600px; margin: auto; border: 2px solid #ef4444; border-radius: 12px; background-color: #0f172a; overflow: hidden;">
                 
                 <div style="background-color: #ef4444; padding: 15px; text-align: center;">
                     <h2 style="color: #ffffff; margin: 0; font-size: 24px; letter-spacing: 2px; text-transform: uppercase;">Critical Watchlist Match</h2>
