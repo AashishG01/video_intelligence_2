@@ -122,15 +122,14 @@ while True:
         # ==========================================================
         # 🎛️ DYNAMIC THRESHOLD SYNC
         # Fetch the latest threshold from Redis (set by React UI)
-        # The UI uses "Similarity" (0 to 1.0). Milvus uses "Distance" (0 to 1.0).
-        # We must convert: Distance = 1.0 - Similarity
+        # For COSINE in Milvus, the distance metric actually returns COSINE SIMILARITY
+        # (higher = better match, 1.0 = exact match).
         # ==========================================================
         raw_thresh = r.get("GLOBAL_MATCH_THRESHOLD")
         if raw_thresh:
-            ui_similarity = float(raw_thresh)
-            CURRENT_MATCH_DISTANCE = 1.0 - ui_similarity
+            CURRENT_MATCH_SIMILARITY = float(raw_thresh)
         else:
-            CURRENT_MATCH_DISTANCE = MATCH_THRESHOLD
+            CURRENT_MATCH_SIMILARITY = 0.60  # Default 60% similarity
 
         for face in faces:
             # Drop low confidence faces (blurry, side profiles)
@@ -163,7 +162,7 @@ while True:
             matched_suspect_name = None
             matched_risk_level = "UNKNOWN"
             person_id = None
-            final_match_distance = 1.0 # Default max distance
+            final_match_similarity = 0.0 # Default min similarity
 
             # ────────────────────────────────────────────────────────
             # 🎯 STAGE 1: WATCHLIST HUNTING (Global "Always-On" Scan)
@@ -181,17 +180,16 @@ while True:
                     
                     if wl_results and len(wl_results[0]) > 0:
                         top_wl = wl_results[0][0]
-                        wl_dist = top_wl['distance']
+                        wl_score = top_wl['distance'] # Actually similarity in this config
                         wl_id = top_wl['entity']['watchlist_id']
                         
                         # ✅ USING DYNAMIC THRESHOLD FROM UI
-                        # COSINE DISTANCE: match when dist is LOW (faces are similar).
-                        # e.g. dist=0.20 means ~80% similar → strong watchlist hit.
-                        if wl_dist < CURRENT_MATCH_DISTANCE:  # dist < 0.35 by default
+                        # COSINE SIMILARITY: match when score is HIGH.
+                        if wl_score >= CURRENT_MATCH_SIMILARITY:
                             is_watchlist_match = True
                             matched_watchlist_id = wl_id
                             person_id = wl_id
-                            final_match_distance = wl_dist
+                            final_match_similarity = wl_score
                             
                             # Fetch suspect real name & risk level from PostgreSQL
                             # NOTE: DB errors are intentionally NOT caught here — they
@@ -220,7 +218,7 @@ while True:
                                 print(f"⚠️  Database Fetch Error: {db_err}")
                                 raise  # Propagate past the watchlist handler for auto-recovery
                                 
-                            print(f"[{cam_id}] 🚨 WATCHLIST HIT: {matched_suspect_name} (Distance: {wl_dist:.4f} | Max Allowed: {CURRENT_MATCH_DISTANCE:.4f})")
+                            print(f"[{cam_id}] 🚨 WATCHLIST HIT: {matched_suspect_name} (Similarity: {wl_score:.4f} | Min Required: {CURRENT_MATCH_SIMILARITY:.4f})")
                 except (psycopg2.Error, OSError) as db_propagated_err:
                     # DB/connection errors must NOT be swallowed — re-raise so the
                     # outer loop's self-healing block can reconnect to PostgreSQL.
@@ -243,18 +241,18 @@ while True:
                     )
                     if search_res and len(search_res[0]) > 0:
                         top  = search_res[0][0]
-                        dist = top['distance']
+                        score = top['distance']
                         
                         # 🧠 CLUSTERING THRESHOLD
                         # Unlike the Watchlist (which is ultra-strict to prevent false alarms),
                         # general clustering needs to be loose to group the same person despite 
-                        # lighting/angle changes. 55% similarity (0.45 distance) is a good baseline.
-                        CLUSTERING_DISTANCE = 0.45
+                        # lighting/angle changes. 55% similarity is a good baseline.
+                        CLUSTERING_SIMILARITY = 0.55
                         
-                        if dist < CLUSTERING_DISTANCE:
+                        if score >= CLUSTERING_SIMILARITY:
                             person_id = top['entity']['person_id']
                             is_match = True
-                            final_match_distance = dist
+                            final_match_similarity = score
                 except Exception as search_err:
                     print(f"⚠️ Milvus search error: {search_err}")
                     continue
@@ -331,10 +329,10 @@ while True:
             elif is_match:
                 ws_status = "MATCH"
 
-            # Convert Cosine Distance (0.0 to 1.0) into a Confidence % (1.0 to 0.0) for the UI
+            # Pass the Cosine Similarity directly to the UI as Confidence %
             ui_confidence = float(face.det_score) 
             if is_watchlist_match or is_match:
-                ui_confidence = 1.0 - final_match_distance
+                ui_confidence = final_match_similarity
 
             # ✅ STRICT API CONTRACT PAYLOAD FOR REACT 
             alert_payload = {
