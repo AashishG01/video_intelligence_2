@@ -1,6 +1,9 @@
 from pydantic import BaseModel, Field
 import os
 from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+
 import cv2
 import numpy as np
 import redis
@@ -24,8 +27,7 @@ from typing import List, Optional
 from auth import verify_password, get_password_hash, create_access_token, get_current_user, require_admin
 from contextlib import asynccontextmanager
 
-env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
-load_dotenv(env_path)
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 # ==========================================
 # 1. SYSTEM SETUP

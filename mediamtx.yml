@@ -1,21 +1,13 @@
-###############################################
-# MediaMTX configuration file
-###############################################
-
-# Set to yes or no to disable specific protocols
-# We rely heavily on WebRTC
-webrtc: yes
-webrtcAddress: :8889
-rtsp: yes
-hls: no
-rtmp: no
-
-# Enable REST API for dynamic camera management
-# FastAPI will use this to add/remove paths on the fly
-api: yes
+api: true
 apiAddress: :9997
-
-# All camera paths are now managed dynamically by the FastAPI backend
-# via the REST API on port 9997. No manual entries needed here.
+hls: false
 paths:
-  all_others:
+  all_others: null
+  cam_1:
+    rtspTransport: tcp
+    source: rtsp://admin:admin@202.71.0.244:554/live.sdp
+    sourceOnDemand: false
+rtmp: false
+rtsp: true
+webrtc: true
+webrtcAddress: :8889
