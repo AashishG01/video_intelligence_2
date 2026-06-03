@@ -184,6 +184,7 @@ const AlertSettingsView = () => {
                     </h3>
                     
                     <div className="space-y-4">
+                        <div className="flex items-center justify-between">
                             <div>
                                 <label className="block text-sm font-bold text-slate-700">Minimum Similarity to Trigger Alert</label>
                                 <p className="text-xs font-medium text-slate-500 mt-1">Higher value = stricter matching (fewer false alerts). Lower value = more sensitive (more false positives).</p>
