@@ -1,22 +1,56 @@
-We have to create an end to end application based on the webserver server based 
--> we can continue using webrtc mediamtx for streaming rstp links and websocket frame sending will also works 
+# C.O.R.E. Video Intelligence - Project Roadmap
 
--> creating a new database for storing human data -> done
--> feature: creating a page which can add subject(human) add details to him -> done
--> creating a database for watchlist -> done
--> adding a feature of watchlist creation with multiple features like defining multiple parameters of watchlist -> done
+This document serves as the unified checklist for the system's development, combining the original requirements with the Minutes of Meeting (MOM – June 2nd).
 
--> feature in image search enhancing the images like adding zoom, crop, sharpen, eyes, smoothen etc before searching to the image --> done
+## 🚀 Pending Objectives (To-Do)
 
--> adding to system info -> showing the avg gpu utilization and cpu utilization of the system 
--> feature : Alert addition along with email, message notification, pop up, Audio 
--> Previous Search Histories it show all the previous matches that has been done and it will show details regarding that 
+### 1. Investigation Module & Forensics
+- [ ] **Image Enhancement:** Add a Super Resolution feature to programmatically enhance (zoom, crop, sharpen, smoothen) blurry images during forensic investigations before searching.
+- [ ] **Direct Processing:** Allow operators to process and view these enhanced images directly from the investigation screen without external tools.
+- [ ] **Search History Analysis:** Provide detailed report analysis of previous search history that can be exported to PDF and Excel.
+- [ ] **Complex Filtering:** Add advanced filtering on reports (Date range, Multiple Cameras dropdown, Multiple Subjects, and a "Match Score %" slider).
 
--> RBAC : role based access control required there has to be 2 systems for different peoples and in both system we have to create multiple login IDs --> done 
+### 2. Map View & Telemetry
+- [ ] **Interactive Surat Map:** Display an interactive city map visualizing all camera locations based on their configured coordinates.
+- [ ] **Camera Telemetry:** Allow users to interact with camera markers on the map to view specific telemetry and details.
 
--> Feature providing detailed report analysis of previous search history and all the details and can be exported to excel and pdf 
--> Complex Filtering on the report: Date range, Dropdown for Multiple Cameras, Multiple Subjects selection, aur ek "Match Score %" ka slider 
--> Anti Duplication if we are adding same people twice so system should check and inform 
--> Creating a HitList of all the people matched recently or queue it on the basis of matched system
--> Adding visual color coding to watchlist and people 
--> Feature: Dynamic MediaMTX API Synchronization. Instead of manually editing mediamtx.yml, FastAPI should use the MediaMTX REST API (port 9997) to dynamically add/remove RTSP routing paths whenever a camera is enrolled or deleted in the PostgreSQL database. --> done
+### 3. NVR & Hardware Integration
+- [ ] **NVR Integration:** Implement NVR (Network Video Recorder) integration for centralized camera stream management and targeted recording searches.
+- [ ] **Automated Discovery:** Support automated camera discovery and stream configuration through connected NVRs.
+- [ ] **System Monitoring:** Build a dashboard widget to monitor the host machine's average GPU and CPU utilization.
+
+### 4. Watchlist Improvements
+- [ ] **Anti-Duplication:** Implement a check during Face Enrollment to warn the user if they are trying to add a person who is already enrolled in the system.
+
+---
+
+## ✅ Completed Objectives
+
+### UI/UX & Architecture
+- [x] **Complete UI Redesign:** Established a highly professional, modern, dark-mode appearance.
+- [x] **Terminology Cleanup:** Stripped out confusing technical jargon (e.g., replaced "WebRTC" and "RTSP" with user-friendly terms).
+- [x] **Database Architecture:** Migrated to a robust PostgreSQL setup (for metadata) alongside Milvus (for vector embeddings).
+- [x] **RBAC (Role-Based Access Control):** Implemented multi-tier admin/user login systems.
+
+### Live Dashboard & Monitoring
+- [x] **Active Target Panel:** Added a high-impact panel displaying the absolute latest detection side-by-side with their Watchlist reference image.
+- [x] **Recent Detections Queue:** Built a real-time queue displaying the last 10 detections, replacing the legacy intel feed.
+- [x] **Dynamic Routing:** Integrated Dynamic MediaMTX API Synchronization to automatically route RTSP streams when cameras are added.
+
+### Watchlist & Face Enrollment
+- [x] **Enrollment UI:** Created a dedicated system to enroll suspects with demographic details, tactical notes, and threat levels.
+- [x] **Absolute Synchronization:** Fixed backend logic to instantly flush Milvus vectors to disk upon enrollment, ensuring targets are searchable in real-time.
+- [x] **Ghost-Match Prevention:** Updated AI Workers to use strict database JOINs to ensure suspects belong to active watchlists before triggering alerts.
+- [x] **Color Coding:** Added visual color coding to Watchlist categories.
+
+### Camera Management
+- [x] **Editable Configs:** Enabled real-time editing of camera properties (including Latitude/Longitude fields).
+- [x] **Active Health Checks:** Built live stream validation that automatically flags dead streams as "Offline".
+- [x] **Interactive Layouts:** Implemented Drag-and-Drop (DND) functionality for the camera grid.
+
+### Alerts & Notifications
+- [x] **Threat Alert Modal:** Added real-time popups to instantly flag critical events to operators.
+- [x] **System-Wide Alert Infrastructure:** Configured SMTP Email integrations and persistent database storage for all generated alerts.
+
+---
+**Target Deadline:** 11th June 2026

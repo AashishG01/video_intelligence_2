@@ -76,6 +76,16 @@ const Dashboard = () => {
             } catch (err) {
                 console.error("Audio Config Error:", err);
             }
+
+            // 3. ✅ FETCH LAST 10 ALERTS FROM DB TO POPULATE QUEUE
+            try {
+                const resAlerts = await api.get('/api/alerts/recent');
+                if (resAlerts.data) {
+                    setLiveAlerts(resAlerts.data);
+                }
+            } catch (err) {
+                console.error("Failed to load recent alerts:", err);
+            }
         };
         bootSystem();
     }, []);
@@ -99,8 +109,8 @@ const Dashboard = () => {
                 try {
                     const data = JSON.parse(event.data);
 
-                    // 1. Inject into standard Live Alerts (Sidebar/Monitor)
-                    setLiveAlerts(prev => [data, ...prev].slice(0, 50));
+                    // 1. Inject into standard Live Alerts (Queue is strictly clamped to 10)
+                    setLiveAlerts(prev => [data, ...prev].slice(0, 10));
 
                     // 2. THE RED ALERT INTERCEPTOR — WATCHLIST HITS ONLY
                     // Only WATCHLIST_MATCH payloads carry full_name / risk_level / reference_image.

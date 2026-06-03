@@ -12,7 +12,7 @@ import psycopg2
 import shutil
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
-from pymilvus import MilvusClient
+from pymilvus import MilvusClient, connections, utility
 from fastapi import FastAPI, UploadFile, File, Form, Query, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -352,8 +352,32 @@ def startup_db_check():
                 image_path TEXT NOT NULL
             );
         """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON sightings(timestamp);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_person_id ON sightings(person_id);")
+
+        # Auto-migrate Latitude/Longitude columns if they don't exist
+        try:
+            cursor.execute("ALTER TABLE cameras ADD COLUMN latitude FLOAT;")
+            cursor.execute("ALTER TABLE cameras ADD COLUMN longitude FLOAT;")
+            print("✅ Auto-migrated cameras table (Added latitude/longitude).")
+        except Exception:
+            pass # Columns already exist
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS live_alerts (
+                id SERIAL PRIMARY KEY,
+                status VARCHAR(50),
+                camera_id VARCHAR(50),
+                person_id VARCHAR(100),
+                timestamp FLOAT,
+                live_image TEXT,
+                confidence FLOAT,
+                is_armed BOOLEAN,
+                full_name VARCHAR(100),
+                risk_level VARCHAR(50),
+                reference_image TEXT
+            );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_live_alerts_ts ON live_alerts(timestamp DESC);")
 
         # Legacy watchlist table removed to prevent Split-Brain Architecture
         
@@ -599,6 +623,15 @@ async def list_subjects(current_user: dict = Depends(get_current_user)):
     return rows
 
 
+def flush_milvus_collection(collection_name: str):
+    """Forces Milvus to flush memory buffers to the index for instant searchability."""
+    try:
+        connections.connect("default", uri="http://localhost:19530")
+        utility.flush([collection_name])
+        print(f"✅ Milvus Force-Flush Complete: {collection_name}")
+    except Exception as e:
+        print(f"⚠️ Warning: Milvus flush failed: {e}")
+
 @app.post("/api/subjects/enroll")
 async def enroll_subject(
     full_name: str = Form(...),          # Changed Query to Form
@@ -666,6 +699,9 @@ async def enroll_subject(
     finally:
         cursor.close(); conn.close()
 
+    # Absolute Synchronization: Flush to disk so AI Worker can search it instantly
+    flush_milvus_collection(WATCHLIST_COLLECTION)
+
     return {"status": "Subject Enrolled in Multiple Lists", "uuid": subject_uuid}
 
 
@@ -692,6 +728,9 @@ async def remove_subject(subject_uuid: str, admin_user: dict = Depends(require_a
     img_path = os.path.join(WATCHLIST_FOLDER, f"{subject_uuid}.jpg")
     if os.path.exists(img_path):
         os.remove(img_path)
+
+    # Absolute Synchronization: Flush so AI Worker immediately stops matching
+    flush_milvus_collection(WATCHLIST_COLLECTION)
 
     return {"status": "Subject Removed", "uuid": subject_uuid}
 
@@ -761,6 +800,10 @@ async def update_subject(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         cursor.close(); conn.close()
+
+    # Absolute Synchronization: Flush to disk so AI Worker searches new photo instantly
+    if file:
+        flush_milvus_collection(WATCHLIST_COLLECTION)
 
     return {"status": "Subject Updated Successfully", "uuid": subject_uuid}
 
@@ -1006,13 +1049,15 @@ class CameraConfig(BaseModel):
     place: str = ""
     rtsp_url: str
     fps_limit: int = Field(default=1, ge=1, le=30, description="Frames per second limit (1-30)")
+    latitude: Optional[float] = Field(default=None, ge=-90.0, le=90.0)
+    longitude: Optional[float] = Field(default=None, ge=-180.0, le=180.0)
 
 @app.get("/api/cameras")
 async def get_cameras():
     conn = get_pg_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        cursor.execute("SELECT id, camera_id, camera_name, place, rtsp_url, fps_limit, is_active FROM cameras ORDER BY created_at DESC")
+        cursor.execute("SELECT id, camera_id, camera_name, place, rtsp_url, fps_limit, is_active, latitude, longitude FROM cameras ORDER BY created_at DESC")
         cameras = cursor.fetchall()
         
         # Cross-reference with MediaMTX to determine true stream health
@@ -1040,9 +1085,9 @@ async def add_camera(cam: CameraConfig, admin_user: dict = Depends(require_admin
     try:
         # We explicitly do NOT use ON CONFLICT DO UPDATE to prevent silent overwrites.
         cursor.execute("""
-            INSERT INTO cameras (camera_id, camera_name, place, rtsp_url, fps_limit, is_active)
-            VALUES (%s, %s, %s, %s, %s, TRUE)
-        """, (cam.camera_id, cam.camera_name, cam.place, cam.rtsp_url, cam.fps_limit))
+            INSERT INTO cameras (camera_id, camera_name, place, rtsp_url, fps_limit, is_active, latitude, longitude)
+            VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
+        """, (cam.camera_id, cam.camera_name, cam.place, cam.rtsp_url, cam.fps_limit, cam.latitude, cam.longitude))
         conn.commit()
     except psycopg2.IntegrityError:
         conn.rollback()
@@ -1073,9 +1118,9 @@ async def edit_camera(camera_id: str, cam: CameraConfig, admin_user: dict = Depe
         
         cursor.execute("""
             UPDATE cameras
-            SET camera_name = %s, place = %s, rtsp_url = %s, fps_limit = %s
+            SET camera_name = %s, place = %s, rtsp_url = %s, fps_limit = %s, latitude = %s, longitude = %s
             WHERE camera_id = %s
-        """, (cam.camera_name, cam.place, cam.rtsp_url, cam.fps_limit, camera_id))
+        """, (cam.camera_name, cam.place, cam.rtsp_url, cam.fps_limit, cam.latitude, cam.longitude, camera_id))
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -1089,6 +1134,24 @@ async def edit_camera(camera_id: str, cam: CameraConfig, admin_user: dict = Depe
         sync_camera_to_mediamtx(camera_id, cam.rtsp_url)
         
     return {"status": "success", "message": "Camera updated successfully"}
+
+@app.get("/api/alerts/recent")
+async def get_recent_alerts():
+    conn = get_pg_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute("""
+            SELECT status, camera_id, person_id, timestamp, live_image, confidence, is_armed, full_name, risk_level, reference_image 
+            FROM live_alerts 
+            ORDER BY timestamp DESC 
+            LIMIT 10
+        """)
+        return cursor.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
 
 @app.delete("/api/cameras/remove/{camera_id}")
 async def remove_camera(camera_id: str, admin_user: dict = Depends(require_admin)):

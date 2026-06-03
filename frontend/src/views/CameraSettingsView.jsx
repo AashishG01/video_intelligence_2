@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Video, Trash2, Edit, Plus, MapPin, Activity, Tag, Link as LinkIcon, Loader2 } from 'lucide-react';
+import { Video, Trash2, Edit, Plus, MapPin, Activity, Tag, Link as LinkIcon, Loader2, Globe } from 'lucide-react';
 import api from '../api';
 
 const CameraSettingsView = () => {
@@ -14,7 +14,9 @@ const CameraSettingsView = () => {
         camera_name: '',
         place: '',
         rtsp_url: '',
-        fps_limit: 1
+        fps_limit: 1,
+        latitude: '',
+        longitude: ''
     });
 
     const fetchCameras = async () => {
@@ -53,7 +55,9 @@ const CameraSettingsView = () => {
                 camera_name: '',
                 place: '',
                 rtsp_url: '',
-                fps_limit: 1
+                fps_limit: 1,
+                latitude: '',
+                longitude: ''
             });
             setIsEditing(false);
             fetchCameras();
@@ -71,14 +75,16 @@ const CameraSettingsView = () => {
             camera_name: cam.camera_name,
             place: cam.place || '',
             rtsp_url: cam.rtsp_url,
-            fps_limit: cam.fps_limit
+            fps_limit: cam.fps_limit,
+            latitude: cam.latitude || '',
+            longitude: cam.longitude || ''
         });
         setIsEditing(true);
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
     const handleCancelEdit = () => {
-        setFormData({ camera_id: '', camera_name: '', place: '', rtsp_url: '', fps_limit: 1 });
+        setFormData({ camera_id: '', camera_name: '', place: '', rtsp_url: '', fps_limit: 1, latitude: '', longitude: '' });
         setIsEditing(false);
     };
 
@@ -106,7 +112,7 @@ const CameraSettingsView = () => {
                         Camera Management
                     </h1>
                     <p className="text-slate-500 mt-2 text-lg">
-                        Dynamically enroll or remove RTSP streams from the surveillance network.
+                        Dynamically enroll or remove camera feeds from the surveillance network.
                     </p>
                 </div>
             </div>
@@ -158,6 +164,35 @@ const CameraSettingsView = () => {
                                         placeholder="e.g. Sector 54 Warehouse"
                                         className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
                                     />
+                                </div>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Latitude</label>
+                                    <div className="relative">
+                                        <Globe className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                                        <input 
+                                            type="number" step="any" name="latitude"
+                                            min="-90" max="90"
+                                            value={formData.latitude} onChange={handleInputChange}
+                                            placeholder="e.g. 28.6139"
+                                            className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Longitude</label>
+                                    <div className="relative">
+                                        <Globe className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                                        <input 
+                                            type="number" step="any" name="longitude"
+                                            min="-180" max="180"
+                                            value={formData.longitude} onChange={handleInputChange}
+                                            placeholder="e.g. 77.2090"
+                                            className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                                        />
+                                    </div>
                                 </div>
                             </div>
 
@@ -260,10 +295,16 @@ const CameraSettingsView = () => {
                                         {cam.place && (
                                             <div className="flex items-center">
                                                 <MapPin className="w-4 h-4 mr-2 text-slate-400 shrink-0" />
-                                                <span className="truncate" title={cam.place}>{cam.place}</span>
+                                                <span className="truncate font-semibold text-slate-700" title={cam.place}>{cam.place}</span>
                                             </div>
                                         )}
-                                        <div className="flex items-center">
+                                        {(cam.latitude !== null && cam.longitude !== null) && (
+                                            <div className="flex items-center text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded w-fit border border-slate-100">
+                                                <Globe className="w-3 h-3 mr-1.5 text-blue-500" />
+                                                {cam.latitude}, {cam.longitude}
+                                            </div>
+                                        )}
+                                        <div className="flex items-center pt-1">
                                             <LinkIcon className="w-4 h-4 mr-2 text-slate-400 shrink-0" />
                                             <span className="truncate font-mono text-xs" title={cam.rtsp_url}>{cam.rtsp_url}</span>
                                         </div>

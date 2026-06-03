@@ -198,7 +198,13 @@ while True:
                             # must propagate to the outer loop's auto-recovery handler
                             # so that a dead PG connection triggers reconnection logic.
                             try:
-                                pg_cursor.execute("SELECT full_name, risk_level FROM subjects WHERE subject_uuid = %s", (wl_id,))
+                                pg_cursor.execute("""
+                                    SELECT s.full_name, s.risk_level 
+                                    FROM subjects s
+                                    INNER JOIN watchlist_members wm ON s.id = wm.subject_id
+                                    WHERE s.subject_uuid = %s AND wm.is_active = TRUE
+                                    LIMIT 1
+                                """, (wl_id,))
                                 row = pg_cursor.fetchone()
                                 if row:
                                     matched_suspect_name = row[0]
@@ -206,7 +212,7 @@ while True:
                                 else:
                                     # Ghost embedding found in Milvus but deleted from Postgres!
                                     # We silently drop this match and pretend we saw nothing.
-                                    print(f"👻 Ghost match ignored: {wl_id} no longer exists in PostgreSQL.")
+                                    print(f"👻 Ghost match ignored: {wl_id} has no active watchlist memberships.")
                                     is_watchlist_match = False
                                     continue
                             except Exception as db_err:
@@ -349,6 +355,25 @@ while True:
             # ALWAYS broadcast to React UI so the Sidebar "Live Intel Feed" keeps updating.
             # We ONLY broadcast if the alert lock wasn't already active for this person.
             if not is_armed or r.ttl(alert_cooldown_key) == DEDUP_WINDOW_SEC:
+                try:
+                    pg_cursor.execute("""
+                        INSERT INTO live_alerts (status, camera_id, person_id, timestamp, live_image, confidence, is_armed, full_name, risk_level, reference_image)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        alert_payload.get("status"),
+                        alert_payload.get("camera_id"),
+                        alert_payload.get("person_id"),
+                        alert_payload.get("timestamp"),
+                        alert_payload.get("live_image"),
+                        alert_payload.get("confidence"),
+                        alert_payload.get("is_armed"),
+                        alert_payload.get("full_name"),
+                        alert_payload.get("risk_level"),
+                        alert_payload.get("reference_image")
+                    ))
+                except Exception as db_err:
+                    print(f"⚠️ Live Alerts DB Insert Error: {db_err}")
+
                 r_pub.publish("live_face_alerts", json.dumps(alert_payload))
                 
             if is_armed:
