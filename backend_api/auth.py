@@ -1,19 +1,42 @@
 import os
+import secrets
+from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-# Load .env file from project root
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+# ─────────────────────────────────────────
+# BULLETPROOF .ENV LOADING
+# This file loads its own .env FIRST, before reading any variables.
+# This eliminates the Python Import Order Race Condition permanently.
+# No matter which file imports auth.py first, the key will always exist.
+# ─────────────────────────────────────────
+env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv(env_path)
 
 # ─────────────────────────────────────────
-# TEMPORARY HARDCODED DEVELOPMENT KEY
-# Bypassing the .env file check to ensure the server boots instantly.
+# JWT SECRET KEY — CRASH-PROOF LOADING
+# Priority Order:
+#   1. Read from .env file (production)
+#   2. Read from system environment variable
+#   3. Auto-generate a temporary dev key (with loud warning)
+# The server will NEVER crash due to a missing key.
 # ─────────────────────────────────────────
-os.environ["JWT_SECRET_KEY"] = "a3f9c2e1b7d4082f6a1c3e5d9f2b4a6c8e0d2f4b6a8c0e2d4f6b8a0c2e4f6b8"
 SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
+
+if not SECRET_KEY:
+    # Generate a temporary key so the server can still boot
+    SECRET_KEY = secrets.token_hex(32)
+    os.environ["JWT_SECRET_KEY"] = SECRET_KEY
+    print("\n" + "=" * 60)
+    print("⚠️  WARNING: JWT_SECRET_KEY not found in .env file!")
+    print("   A temporary key has been auto-generated for this session.")
+    print("   ⚡ All existing login tokens will be INVALIDATED on restart.")
+    print("   To fix permanently, add this to your .env file:")
+    print(f'   JWT_SECRET_KEY={SECRET_KEY}')
+    print("=" * 60 + "\n")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 Hours
