@@ -184,10 +184,9 @@ const AlertSettingsView = () => {
                     </h3>
                     
                     <div className="space-y-4">
-                        <div className="flex justify-between items-end">
                             <div>
-                                <label className="block text-sm font-bold text-slate-700">Cosine Distance Threshold</label>
-                                <p className="text-xs font-medium text-slate-500 mt-1">Lower value = stricter matching. Higher value = more false positives.</p>
+                                <label className="block text-sm font-bold text-slate-700">Minimum Similarity to Trigger Alert</label>
+                                <p className="text-xs font-medium text-slate-500 mt-1">Higher value = stricter matching (fewer false alerts). Lower value = more sensitive (more false positives).</p>
                             </div>
                             <span className="text-2xl font-black text-indigo-600">{threshold}%</span>
                         </div>
@@ -201,10 +200,10 @@ const AlertSettingsView = () => {
                             className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
                         />
                         
-                        {threshold > 75 && (
+                        {threshold < 50 && (
                             <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg flex items-start text-amber-800 text-sm font-medium mt-4">
                                 <AlertTriangle className="w-5 h-5 mr-2 shrink-0 text-amber-500" />
-                                Warning: A threshold above 75% will cause the AI to hallucinate matches. Expect severe false positives.
+                                Warning: A similarity below 50% is extremely loose. The AI will flag people who look vaguely similar. Expect severe false positives.
                             </div>
                         )}
                     </div>

@@ -19,7 +19,6 @@ import Sidebar from '../components/Sidebar';
 import LiveMonitorView from '../views/LiveMonitorView';
 import InvestigatorView from '../views/InvestigatorView';
 import SystemStatusView from '../views/SystemStatusView';
-import EventFeedView from '../views/EventFeedView';
 import AdminPanel from '../views/AdminPanel';
 import WatchlistManager from '../views/WatchlistManager';
 import AlertSettingsView from '../views/AlertSettingsView';
@@ -32,9 +31,6 @@ const Dashboard = () => {
     // --- UI & Routing State ---
     const [currentView, setCurrentView] = useState('monitor');
     const [liveAlerts, setLiveAlerts] = useState([]);
-    const [systemLogs, setSystemLogs] = useState([
-        { time: new Date().toLocaleTimeString(), msg: "C.O.R.E. SYSTEM BOOT: ACCESS GRANTED", type: "system" }
-    ]);
 
     // --- Threat Alert Interceptor State ---
     const [criticalAlert, setCriticalAlert] = useState(null);
@@ -97,11 +93,6 @@ const Dashboard = () => {
 
             ws.onopen = () => {
                 isConnected = true;
-                setSystemLogs(prev => [{
-                    time: new Date().toLocaleTimeString(),
-                    msg: "CONNECTED: Real-time AI stream active.",
-                    type: "success"
-                }, ...prev]);
             };
 
             ws.onmessage = (event) => {
@@ -129,12 +120,6 @@ const Dashboard = () => {
                     const logType = data.status.includes("MATCH") ? "error" : "success";
                     const logMsg = `[CAM-${data.camera_id}] ${statusText}: ${data.person_id || data.full_name} (${(data.confidence * 100).toFixed(1)}%)`;
 
-                    setSystemLogs(prev => [{
-                        time: new Date().toLocaleTimeString(),
-                        msg: logMsg,
-                        type: logType
-                    }, ...prev].slice(0, 100));
-
                 } catch (err) {
                     console.error("Intelligence Packet Error:", err);
                 }
@@ -142,11 +127,6 @@ const Dashboard = () => {
 
             ws.onclose = () => {
                 if (isConnected) {
-                    setSystemLogs(prev => [{
-                        time: new Date().toLocaleTimeString(),
-                        msg: "CRITICAL: Connection lost. Re-establishing...",
-                        type: "system"
-                    }, ...prev]);
                     isConnected = false;
                 }
                 setTimeout(connectWebSocket, 5000);
@@ -189,12 +169,6 @@ const Dashboard = () => {
             await api.post('/api/system/toggle', { is_armed: newState });
             setIsArmed(newState);
 
-            setSystemLogs(prev => [{
-                time: new Date().toLocaleTimeString(),
-                msg: `GLOBAL SYSTEM OVERRIDE: AI Surveillance ${newState ? 'ARMED' : 'DISARMED'} by ${user.username}`,
-                type: newState ? "success" : "warning"
-            }, ...prev].slice(0, 100));
-
         } catch (err) {
             alert("Failed to toggle system state.");
         } finally {
@@ -210,7 +184,6 @@ const Dashboard = () => {
         { id: 'investigator', label: 'Investigator', icon: UserSearch },
         { id: 'watchlist', label: 'Watchlist', icon: Users },
         { id: 'status', label: 'System Status', icon: BarChart3 },
-        { id: 'feed', label: 'Event Feed', icon: Terminal },
         { id: 'alert_settings', label: 'Alert Settings', icon: Settings }, 
     ];
 
@@ -227,7 +200,6 @@ const Dashboard = () => {
             case 'investigator': return <InvestigatorView />;
             case 'watchlist': return <WatchlistManager />;
             case 'status': return <SystemStatusView />;
-            case 'feed': return <EventFeedView systemLogs={systemLogs} />;
             case 'alert_settings': return <AlertSettingsView />; 
             case 'camera_settings': return user?.role === 'admin' ? <CameraSettingsView /> : <LiveMonitorView liveAlerts={liveAlerts} />;
             case 'admin': return user?.role === 'admin' ? <AdminPanel /> : <InvestigatorView />;

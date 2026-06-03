@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Video, Trash2, Plus, MapPin, Activity, Tag, Link as LinkIcon, Loader2 } from 'lucide-react';
+import { Video, Trash2, Edit, Plus, MapPin, Activity, Tag, Link as LinkIcon, Loader2 } from 'lucide-react';
 import api from '../api';
 
 const CameraSettingsView = () => {
     const [cameras, setCameras] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isEditing, setIsEditing] = useState(false);
 
     // Form State
     const [formData, setFormData] = useState({
@@ -37,11 +38,15 @@ const CameraSettingsView = () => {
         setFormData(prev => ({ ...prev, [name]: value }));
     };
 
-    const handleAddCamera = async (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
         setIsSubmitting(true);
         try {
-            await api.post('/api/cameras/add', formData);
+            if (isEditing) {
+                await api.put(`/api/cameras/edit/${formData.camera_id}`, formData);
+            } else {
+                await api.post('/api/cameras/add', formData);
+            }
             // Reset form
             setFormData({
                 camera_id: '',
@@ -50,13 +55,31 @@ const CameraSettingsView = () => {
                 rtsp_url: '',
                 fps_limit: 1
             });
+            setIsEditing(false);
             fetchCameras();
         } catch (error) {
-            console.error("Failed to add camera:", error);
-            alert(error.response?.data?.detail || "Failed to add camera");
+            console.error("Failed to save camera:", error);
+            alert(error.response?.data?.detail || "Failed to save camera");
         } finally {
             setIsSubmitting(false);
         }
+    };
+
+    const handleEditClick = (cam) => {
+        setFormData({
+            camera_id: cam.camera_id,
+            camera_name: cam.camera_name,
+            place: cam.place || '',
+            rtsp_url: cam.rtsp_url,
+            fps_limit: cam.fps_limit
+        });
+        setIsEditing(true);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
+    const handleCancelEdit = () => {
+        setFormData({ camera_id: '', camera_name: '', place: '', rtsp_url: '', fps_limit: 1 });
+        setIsEditing(false);
     };
 
     const handleDeleteCamera = async (cameraId) => {
@@ -93,11 +116,11 @@ const CameraSettingsView = () => {
                 <div className="lg:col-span-1">
                     <div className="bg-white p-6 rounded-[24px] shadow-xl border border-slate-100">
                         <h2 className="text-xl font-bold text-slate-800 flex items-center mb-6">
-                            <Plus className="w-5 h-5 mr-2 text-green-600" />
-                            Enroll New Stream
+                            {isEditing ? <Edit className="w-5 h-5 mr-2 text-blue-600" /> : <Plus className="w-5 h-5 mr-2 text-green-600" />}
+                            {isEditing ? 'Edit Camera Stream' : 'Enroll New Stream'}
                         </h2>
                         
-                        <form onSubmit={handleAddCamera} className="space-y-4">
+                        <form onSubmit={handleSubmit} className="space-y-4">
                             <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Camera ID (Unique)</label>
                                 <div className="relative">
@@ -105,8 +128,9 @@ const CameraSettingsView = () => {
                                     <input 
                                         type="text" name="camera_id" required
                                         value={formData.camera_id} onChange={handleInputChange}
+                                        disabled={isEditing}
                                         placeholder="e.g. cam_south_01"
-                                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                                        className={`w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all ${isEditing ? 'opacity-50 cursor-not-allowed' : ''}`}
                                     />
                                 </div>
                             </div>
@@ -163,13 +187,24 @@ const CameraSettingsView = () => {
                                 <p className="text-xs text-slate-400 mt-1">Lower FPS saves AI resources. Recommended: 1</p>
                             </div>
 
-                            <button 
-                                type="submit" 
-                                disabled={isSubmitting}
-                                className="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-blue-500/30 transition-all flex justify-center items-center"
-                            >
-                                {isSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Enroll Camera'}
-                            </button>
+                            <div className="flex gap-2 pt-2">
+                                <button 
+                                    type="submit" 
+                                    disabled={isSubmitting}
+                                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-xl shadow-lg shadow-blue-500/30 transition-all flex justify-center items-center"
+                                >
+                                    {isSubmitting ? <Loader2 className="w-5 h-5 animate-spin" /> : (isEditing ? 'Update Camera' : 'Enroll Camera')}
+                                </button>
+                                {isEditing && (
+                                    <button 
+                                        type="button" 
+                                        onClick={handleCancelEdit}
+                                        className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-all"
+                                    >
+                                        Cancel
+                                    </button>
+                                )}
+                            </div>
                         </form>
                     </div>
                 </div>
@@ -203,13 +238,22 @@ const CameraSettingsView = () => {
                                                 {cam.camera_id}
                                             </div>
                                         </div>
-                                        <button 
-                                            onClick={() => handleDeleteCamera(cam.camera_id)}
-                                            className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors"
-                                            title="Delete Camera"
-                                        >
-                                            <Trash2 className="w-5 h-5" />
-                                        </button>
+                                        <div className="flex gap-1">
+                                            <button 
+                                                onClick={() => handleEditClick(cam)}
+                                                className="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-2 rounded-lg transition-colors"
+                                                title="Edit Camera"
+                                            >
+                                                <Edit className="w-5 h-5" />
+                                            </button>
+                                            <button 
+                                                onClick={() => handleDeleteCamera(cam.camera_id)}
+                                                className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                                                title="Delete Camera"
+                                            >
+                                                <Trash2 className="w-5 h-5" />
+                                            </button>
+                                        </div>
                                     </div>
 
                                     <div className="mt-4 space-y-2 text-sm text-slate-600">
@@ -229,10 +273,15 @@ const CameraSettingsView = () => {
                                         </div>
                                     </div>
                                     
-                                    {cam.is_active && (
-                                        <div className="absolute bottom-4 right-4 flex items-center text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+                                    {cam.is_active ? (
+                                        <div className="absolute bottom-4 right-4 flex items-center text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full border border-emerald-100">
                                             <div className="w-2 h-2 bg-emerald-500 rounded-full mr-1 animate-pulse"></div>
                                             ONLINE
+                                        </div>
+                                    ) : (
+                                        <div className="absolute bottom-4 right-4 flex items-center text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded-full border border-red-100">
+                                            <div className="w-2 h-2 bg-red-500 rounded-full mr-1"></div>
+                                            OFFLINE
                                         </div>
                                     )}
                                 </div>

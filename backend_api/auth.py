@@ -6,8 +6,9 @@ from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-# Load .env file from project root
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+# Load .env file from project root (using absolute path to be bulletproof)
+env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv(env_path)
 
 # ─────────────────────────────────────────
 # JWT SECURITY CONFIGURATION

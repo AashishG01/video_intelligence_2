@@ -24,7 +24,8 @@ from typing import List, Optional
 from auth import verify_password, get_password_hash, create_access_token, get_current_user, require_admin
 from contextlib import asynccontextmanager
 
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv(env_path)
 
 # ==========================================
 # 1. SYSTEM SETUP
@@ -105,6 +106,11 @@ _PG_DSN = dict(
 print("⏳ Initialising PostgreSQL connection pool (2–10 connections)...")
 _pg_pool = ThreadedConnectionPool(minconn=2, maxconn=10, **_PG_DSN)
 print("✅ PostgreSQL pool ready.")
+
+print("⏳ Loading InsightFace AI model for FastAPI Enrollment...")
+face_app = FaceAnalysis(name='antelopev2', root='./models', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+face_app.prepare(ctx_id=0, det_size=(640, 640))
+print("✅ FastAPI InsightFace ready.")
 
 
 class _PooledConn:
@@ -434,7 +440,9 @@ async def search_by_image(
     cursor = conn.cursor(cursor_factory=RealDictCursor)
 
     for match in search_res[0]:
-        if match['distance'] >= threshold:
+        # Convert UI Similarity % (e.g. 0.75) to Milvus Max Allowed Distance (0.25)
+        max_allowed_distance = 1.0 - threshold
+        if match['distance'] <= max_allowed_distance:
             person_id = match['entity']['person_id']
             cursor.execute("SELECT camera_id, timestamp, image_path FROM sightings WHERE person_id = %s", (person_id,))
             pg_records = cursor.fetchall()
@@ -632,7 +640,6 @@ async def enroll_subject(
         collection_name=WATCHLIST_COLLECTION,
         data=[{"watchlist_id": subject_uuid, "embedding": embedding}]
     )
-    milvus_client.flush(collection_name=WATCHLIST_COLLECTION)
 
     # 4. Insert into PostgreSQL
     conn = get_pg_connection()
@@ -747,7 +754,6 @@ async def update_subject(
             milvus_client.load_collection(WATCHLIST_COLLECTION)
             milvus_client.delete(collection_name=WATCHLIST_COLLECTION, filter=f'watchlist_id == "{subject_uuid}"')
             milvus_client.insert(collection_name=WATCHLIST_COLLECTION, data=[{"watchlist_id": subject_uuid, "embedding": embedding}])
-            milvus_client.flush(collection_name=WATCHLIST_COLLECTION)
 
         conn.commit()
     except Exception as e:
@@ -904,6 +910,7 @@ MEDIAMTX_API = "http://localhost:9997"
 
 import os
 import yaml
+import subprocess
 
 def get_mediamtx_yml_path():
     """Dynamically get the absolute path to mediamtx.yml at the project root."""
@@ -929,7 +936,10 @@ def append_to_mediamtx_yml(camera_id: str, rtsp_url: str):
         with open(yml_path, "w") as f:
             yaml.dump(config, f, default_flow_style=False)
             
-        print(f"✅ FILE SYNC: '{camera_id}' automatically written to mediamtx.yml! (Restart MediaMTX to apply)")
+        print(f"✅ FILE SYNC: '{camera_id}' automatically written to mediamtx.yml!")
+        print("🔄 Automating Docker Restart for core_mediamtx...")
+        subprocess.run(["docker", "restart", "core_mediamtx"], check=False)
+        print("✅ MediaMTX Restarted successfully.")
     except Exception as e:
         print(f"❌ FILE SYNC FAILED: Could not edit mediamtx.yml manually. Error: {e}")
 
@@ -945,6 +955,9 @@ def remove_from_mediamtx_yml(camera_id: str):
             with open(yml_path, "w") as f:
                 yaml.dump(config, f, default_flow_style=False)
             print(f"🗑️ FILE SYNC: '{camera_id}' removed from mediamtx.yml")
+            print("🔄 Automating Docker Restart for core_mediamtx...")
+            subprocess.run(["docker", "restart", "core_mediamtx"], check=False)
+            print("✅ MediaMTX Restarted successfully.")
     except Exception as e:
         print(f"❌ FILE SYNC FAILED: Could not delete from mediamtx.yml manually. Error: {e}")
 
@@ -1000,7 +1013,22 @@ async def get_cameras():
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
         cursor.execute("SELECT id, camera_id, camera_name, place, rtsp_url, fps_limit, is_active FROM cameras ORDER BY created_at DESC")
-        return cursor.fetchall()
+        cameras = cursor.fetchall()
+        
+        # Cross-reference with MediaMTX to determine true stream health
+        try:
+            res = http_requests.get(f"{MEDIAMTX_API}/v3/paths/list", timeout=2)
+            if res.status_code == 200:
+                data = res.json()
+                active_paths = {item.get("name") for item in data.get("items", []) if item.get("ready") == True}
+                
+                # Override DB flag with true live status
+                for cam in cameras:
+                    cam['is_active'] = cam['camera_id'] in active_paths
+        except Exception as e:
+            print(f"⚠️ Could not verify stream health from MediaMTX: {e}")
+            
+        return cameras
     finally:
         cursor.close()
         conn.close()
@@ -1030,6 +1058,37 @@ async def add_camera(cam: CameraConfig, admin_user: dict = Depends(require_admin
     sync_camera_to_mediamtx(cam.camera_id, cam.rtsp_url)
     
     return {"status": "success", "message": "Camera enrolled and video route created"}
+
+@app.put("/api/cameras/edit/{camera_id}")
+async def edit_camera(camera_id: str, cam: CameraConfig, admin_user: dict = Depends(require_admin)):
+    conn = get_pg_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute("SELECT rtsp_url FROM cameras WHERE camera_id = %s", (camera_id,))
+        existing = cursor.fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Camera not found")
+        
+        old_rtsp = existing['rtsp_url']
+        
+        cursor.execute("""
+            UPDATE cameras
+            SET camera_name = %s, place = %s, rtsp_url = %s, fps_limit = %s
+            WHERE camera_id = %s
+        """, (cam.camera_name, cam.place, cam.rtsp_url, cam.fps_limit, camera_id))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+        
+    # Only restart MediaMTX if the video stream URL actually changed
+    if old_rtsp != cam.rtsp_url:
+        sync_camera_to_mediamtx(camera_id, cam.rtsp_url)
+        
+    return {"status": "success", "message": "Camera updated successfully"}
 
 @app.delete("/api/cameras/remove/{camera_id}")
 async def remove_camera(camera_id: str, admin_user: dict = Depends(require_admin)):

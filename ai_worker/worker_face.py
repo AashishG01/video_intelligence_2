@@ -122,9 +122,15 @@ while True:
         # ==========================================================
         # 🎛️ DYNAMIC THRESHOLD SYNC
         # Fetch the latest threshold from Redis (set by React UI)
+        # The UI uses "Similarity" (0 to 1.0). Milvus uses "Distance" (0 to 1.0).
+        # We must convert: Distance = 1.0 - Similarity
         # ==========================================================
         raw_thresh = r.get("GLOBAL_MATCH_THRESHOLD")
-        CURRENT_MATCH_THRESHOLD = float(raw_thresh) if raw_thresh else MATCH_THRESHOLD
+        if raw_thresh:
+            ui_similarity = float(raw_thresh)
+            CURRENT_MATCH_DISTANCE = 1.0 - ui_similarity
+        else:
+            CURRENT_MATCH_DISTANCE = MATCH_THRESHOLD
 
         for face in faces:
             # Drop low confidence faces (blurry, side profiles)
@@ -181,7 +187,7 @@ while True:
                         # ✅ USING DYNAMIC THRESHOLD FROM UI
                         # COSINE DISTANCE: match when dist is LOW (faces are similar).
                         # e.g. dist=0.20 means ~80% similar → strong watchlist hit.
-                        if wl_dist < CURRENT_MATCH_THRESHOLD:  # dist < 0.35 by default
+                        if wl_dist < CURRENT_MATCH_DISTANCE:  # dist < 0.35 by default
                             is_watchlist_match = True
                             matched_watchlist_id = wl_id
                             person_id = wl_id
@@ -198,15 +204,17 @@ while True:
                                     matched_suspect_name = row[0]
                                     matched_risk_level = row[1]
                                 else:
-                                    # Subject deleted from Postgres but ghost remains in Milvus?
-                                    matched_suspect_name = wl_id
-                                    matched_risk_level = "UNKNOWN"
+                                    # Ghost embedding found in Milvus but deleted from Postgres!
+                                    # We silently drop this match and pretend we saw nothing.
+                                    print(f"👻 Ghost match ignored: {wl_id} no longer exists in PostgreSQL.")
+                                    is_watchlist_match = False
+                                    continue
                             except Exception as db_err:
                                 matched_suspect_name = wl_id
                                 print(f"⚠️  Database Fetch Error: {db_err}")
                                 raise  # Propagate past the watchlist handler for auto-recovery
                                 
-                            print(f"[{cam_id}] 🚨 WATCHLIST HIT: {matched_suspect_name} (Distance: {wl_dist:.4f} | Thresh: {CURRENT_MATCH_THRESHOLD})")
+                            print(f"[{cam_id}] 🚨 WATCHLIST HIT: {matched_suspect_name} (Distance: {wl_dist:.4f} | Max Allowed: {CURRENT_MATCH_DISTANCE:.4f})")
                 except (psycopg2.Error, OSError) as db_propagated_err:
                     # DB/connection errors must NOT be swallowed — re-raise so the
                     # outer loop's self-healing block can reconnect to PostgreSQL.
@@ -231,9 +239,13 @@ while True:
                         top  = search_res[0][0]
                         dist = top['distance']
                         
-                        # ✅ USING DYNAMIC THRESHOLD FROM UI
-                        # COSINE DISTANCE: match when dist is LOW (faces are similar).
-                        if dist < CURRENT_MATCH_THRESHOLD:  # dist < 0.35 by default
+                        # 🧠 CLUSTERING THRESHOLD
+                        # Unlike the Watchlist (which is ultra-strict to prevent false alarms),
+                        # general clustering needs to be loose to group the same person despite 
+                        # lighting/angle changes. 55% similarity (0.45 distance) is a good baseline.
+                        CLUSTERING_DISTANCE = 0.45
+                        
+                        if dist < CLUSTERING_DISTANCE:
                             person_id = top['entity']['person_id']
                             is_match = True
                             final_match_distance = dist
@@ -241,9 +253,11 @@ while True:
                     print(f"⚠️ Milvus search error: {search_err}")
                     continue
 
-            # If completely new face, generate a new ID
+            # If completely new face, generate a new ID and flag for Milvus insertion
+            is_new_person = False
             if not person_id:
                 person_id = f"P_{int(time.time() * 1000)}"
+                is_new_person = True
 
             # ==========================================================
             # ⏱️ SPLIT ANTI-SPAM COOLDOWNS (DB vs Alerts)
@@ -281,13 +295,18 @@ while True:
             relative_path = f"/images/{person_id}/{filename}"
 
             # ── SAVE TO DATABASE ──
-            # Milvus: Only store non-watchlist people (watchlist is already stored in a separate collection)
-            if not is_watchlist_match:
-                milvus_client.insert(
-                    collection_name=COLLECTION_NAME,
-                    data=[{"person_id": person_id, "embedding": embedding}]
-                )
-                # Removed per-frame milvus_client.flush() to prevent severe performance bottlenecks
+            # Milvus: ONLY store the vector if this is a brand NEW person!
+            # We don't need 1,000 identical vectors of the same person clogging up Milvus.
+            if is_new_person and not is_watchlist_match:
+                try:
+                    milvus_client.insert(
+                        collection_name=COLLECTION_NAME,
+                        data=[{"person_id": person_id, "embedding": embedding}]
+                    )
+                    # Safe to flush now because we only do it once per new person, not every frame!
+                    milvus_client.flush(collection_name=COLLECTION_NAME)
+                except Exception as e:
+                    print(f"⚠️ Milvus Insert Error: {e}")
 
             # PostgreSQL: ALWAYS store the physical sighting (for timelines/investigation)
             db_path = f"/captured_faces/{person_id}/{filename}"
