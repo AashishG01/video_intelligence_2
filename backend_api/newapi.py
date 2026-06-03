@@ -110,7 +110,10 @@ _pg_pool = ThreadedConnectionPool(minconn=2, maxconn=10, **_PG_DSN)
 print("✅ PostgreSQL pool ready.")
 
 print("⏳ Loading InsightFace AI model for FastAPI Enrollment...")
-face_app = FaceAnalysis(name='antelopev2', root='./models', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+# 🎯 Absolute Path Fix: Dynamically track the 'models' folder at the project root
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+MODEL_ROOT = os.path.join(PROJECT_ROOT, "models")
+face_app = FaceAnalysis(name='antelopev2', root=MODEL_ROOT, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
 face_app.prepare(ctx_id=0, det_size=(640, 640))
 print("✅ FastAPI InsightFace ready.")
 
