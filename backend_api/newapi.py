@@ -1148,6 +1148,7 @@ async def get_recent_alerts():
         cursor.execute("""
             SELECT status, camera_id, person_id, timestamp, live_image, confidence, is_armed, full_name, risk_level, reference_image 
             FROM live_alerts 
+            WHERE status = 'WATCHLIST_MATCH'
             ORDER BY timestamp DESC 
             LIMIT 10
         """)

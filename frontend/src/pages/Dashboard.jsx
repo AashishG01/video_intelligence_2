@@ -109,19 +109,21 @@ const Dashboard = () => {
                 try {
                     const data = JSON.parse(event.data);
 
-                    // 1. Inject into standard Live Alerts (Queue is strictly clamped to 10)
-                    setLiveAlerts(prev => [data, ...prev].slice(0, 10));
+                    // 1. FILTER: Only process WATCHLIST_MATCH for the UI queue and alerts
+                    if (data.status === "WATCHLIST_MATCH") {
+                        // Inject into standard Live Alerts (Queue is strictly clamped to 10)
+                        setLiveAlerts(prev => [data, ...prev].slice(0, 10));
 
-                    // 2. THE RED ALERT INTERCEPTOR — WATCHLIST HITS ONLY
-                    // Only WATCHLIST_MATCH payloads carry full_name / risk_level / reference_image.
-                    // Generic MATCH alerts do NOT have these fields, so the modal must not fire for them.
-                    if (data.status === "WATCHLIST_MATCH" && data.is_armed === true) {
-                        setCriticalAlert(data);
-                        
-                        // ✅ DYNAMIC AUDIO PLAYBACK
-                        if (alarmAudioRef.current) {
-                            alarmAudioRef.current.loop = true;
-                            alarmAudioRef.current.play().catch(err => console.log("Audio autoplay blocked by browser."));
+                        // 2. THE RED ALERT INTERCEPTOR
+                        // Only trigger the massive modal and audio if system is Armed
+                        if (data.is_armed === true) {
+                            setCriticalAlert(data);
+                            
+                            // DYNAMIC AUDIO PLAYBACK
+                            if (alarmAudioRef.current) {
+                                alarmAudioRef.current.loop = true;
+                                alarmAudioRef.current.play().catch(err => console.log("Audio autoplay blocked by browser."));
+                            }
                         }
                     }
 
