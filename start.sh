@@ -13,8 +13,10 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# 🧠 CRITICAL: All paths are double-quoted to handle spaces in directory names
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_PYTHON="$PROJECT_DIR/venv/bin/python"
+VENV_PIP="$PROJECT_DIR/venv/bin/pip"
 
 echo ""
 echo -e "${CYAN}╔══════════════════════════════════════════════════╗${NC}"
@@ -33,6 +35,7 @@ if [ ! -f "$VENV_PYTHON" ]; then
     exit 1
 fi
 echo -e "${GREEN}✅ Virtual environment found.${NC}"
+echo -e "${GREEN}   Using Python: $VENV_PYTHON${NC}"
 
 # ──────────────────────────────────────────────────
 # PHASE 2: Start Docker Infrastructure
@@ -53,7 +56,7 @@ sleep 10
 echo ""
 echo -e "${YELLOW}[PHASE 3/5]${NC} Running database initialization (safe - idempotent)..."
 cd "$PROJECT_DIR/database_init"
-$VENV_PYTHON init_db.py
+"$VENV_PYTHON" init_db.py
 echo -e "${GREEN}✅ Database infrastructure verified.${NC}"
 
 # ──────────────────────────────────────────────────
