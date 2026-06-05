@@ -8,7 +8,8 @@ import {
     Users,
     Power,
     Settings,
-    Video
+    Video,
+    MapPin
 } from 'lucide-react';
 import { WS_URL } from '../config';
 import api from '../api'; 
@@ -24,6 +25,7 @@ import WatchlistManager from '../views/WatchlistManager';
 import AlertSettingsView from '../views/AlertSettingsView';
 import CameraSettingsView from '../views/CameraSettingsView';
 import ThreatAlertModal from '../components/ThreatAlertModal';
+import MapView from '../views/MapView';
 
 const Dashboard = () => {
     const { user } = useContext(AuthContext);
@@ -193,6 +195,7 @@ const Dashboard = () => {
     // ==========================================
     const baseNavItems = [
         { id: 'monitor', label: 'Live Monitor', icon: MonitorPlay },
+        { id: 'map', label: 'City Map', icon: MapPin },
         { id: 'investigator', label: 'Investigator', icon: UserSearch },
         { id: 'watchlist', label: 'Watchlist', icon: Users },
         { id: 'status', label: 'System Status', icon: BarChart3 },
@@ -209,6 +212,7 @@ const Dashboard = () => {
     const renderView = () => {
         switch (currentView) {
             case 'monitor': return <LiveMonitorView liveAlerts={liveAlerts} />;
+            case 'map': return <MapView />;
             case 'investigator': return <InvestigatorView />;
             case 'watchlist': return <WatchlistManager />;
             case 'status': return <SystemStatusView />;
