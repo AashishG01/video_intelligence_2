@@ -91,8 +91,8 @@ const LiveMonitorView = ({ liveAlerts }) => {
     const [cameras, setCameras] = useState([]);
     const [camStatus, setCamStatus] = useState({});
     
-    // Grid of 4 monitoring slots, storing camera_id or null
-    const [slots, setSlots] = useState([null, null, null, null]);
+    // Dynamic array of active camera IDs
+    const [activeCameras, setActiveCameras] = useState([]);
 
     // Fetch dynamic cameras from PostgreSQL backend
     useEffect(() => {
@@ -148,28 +148,23 @@ const LiveMonitorView = ({ liveAlerts }) => {
         e.preventDefault();
     };
 
-    const handleDrop = (e, slotIndex) => {
+    const handleDrop = (e) => {
         e.preventDefault();
         const camId = e.dataTransfer.getData('cameraId');
         if (!camId) return;
 
-        setSlots(prev => {
-            const newSlots = [...prev];
-            // Remove this camera from any other slot it might be in (optional, but good UX)
-            const existingIndex = newSlots.indexOf(camId);
-            if (existingIndex !== -1) newSlots[existingIndex] = null;
-            
-            newSlots[slotIndex] = camId;
-            return newSlots;
+        setActiveCameras(prev => {
+            if (prev.includes(camId)) return prev; // Prevent duplicate feeds
+            return [...prev, camId];
         });
     };
 
-    const clearSlot = (slotIndex) => {
-        setSlots(prev => {
-            const newSlots = [...prev];
-            newSlots[slotIndex] = null;
-            return newSlots;
-        });
+    const clearCamera = (camId) => {
+        setActiveCameras(prev => prev.filter(id => id !== camId));
+    };
+
+    const clearAllCameras = () => {
+        setActiveCameras([]);
     };
 
     return (
@@ -221,6 +216,14 @@ const LiveMonitorView = ({ liveAlerts }) => {
                     </div>
 
                     <div className="flex items-center gap-3">
+                        {activeCameras.length > 0 && (
+                            <button 
+                                onClick={clearAllCameras}
+                                className="text-slate-500 hover:text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg text-sm font-bold transition-colors"
+                            >
+                                Clear Board
+                            </button>
+                        )}
                         <span className="text-blue-600 bg-blue-50 border border-blue-200 px-4 py-1.5 rounded-full text-sm font-bold flex items-center shadow-sm">
                             <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse mr-2"></span>
                             Live Feed Active
@@ -228,55 +231,66 @@ const LiveMonitorView = ({ liveAlerts }) => {
                     </div>
                 </div>
 
-                {/* CAMERA GRID: Fixed 2x2 Drop Zones */}
-                <div className="grid grid-cols-2 gap-4 h-[calc(100%-60px)]">
-                    {slots.map((slottedCamId, idx) => {
-                        const cam = cameras.find(c => c.id === slottedCamId);
-                        
-                        return (
-                            <div 
-                                key={idx}
-                                onDragOver={handleDragOver}
-                                onDrop={(e) => handleDrop(e, idx)}
-                                className={`rounded-2xl overflow-hidden relative transition-all ${cam ? 'bg-slate-900 shadow-lg border border-slate-800' : 'bg-slate-200 border-2 border-dashed border-slate-300 flex items-center justify-center hover:bg-slate-300/50 hover:border-blue-400'}`}
-                            >
-                                {cam ? (
-                                    <>
-                                        {/* Overlay Header */}
-                                        <div className="absolute top-3 left-3 z-10 text-white text-xs font-bold tracking-widest uppercase bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 cursor-pointer hover:bg-blue-600/80 transition-colors" onClick={() => setSelectedCam(cam)}>
-                                            {cam.label}
-                                        </div>
-                                        
-                                        {/* Close Button */}
-                                        <button 
-                                            onClick={() => clearSlot(idx)}
-                                            className="absolute top-3 right-3 z-10 text-white/70 hover:text-white bg-black/40 hover:bg-red-500/90 p-1.5 rounded-lg transition-colors"
-                                            title="Remove from slot"
-                                        >
-                                            <X className="w-4 h-4" />
-                                        </button>
+                {/* CAMERA GRID: Dynamic Auto-Scaling Grid */}
+                <div 
+                    className={`grid gap-4 h-[calc(100%-60px)] overflow-y-auto custom-scrollbar content-start ${
+                        activeCameras.length === 0 ? 'flex items-center justify-center' :
+                        activeCameras.length === 1 ? 'grid-cols-1' :
+                        activeCameras.length === 2 ? 'grid-cols-2' :
+                        activeCameras.length <= 4 ? 'grid-cols-2 grid-rows-2' :
+                        activeCameras.length <= 9 ? 'grid-cols-3' :
+                        'grid-cols-4'
+                    }`}
+                    onDragOver={handleDragOver}
+                    onDrop={handleDrop}
+                >
+                    {activeCameras.length === 0 ? (
+                        <div className="text-slate-400 flex flex-col items-center pointer-events-none w-full max-w-md mx-auto p-12 border-2 border-dashed border-slate-200 rounded-3xl bg-slate-50">
+                            <MonitorPlay className="w-16 h-16 mb-4 text-slate-300" />
+                            <h3 className="text-lg font-black uppercase tracking-widest text-slate-500 mb-2">Awaiting Feeds</h3>
+                            <p className="text-sm font-medium text-center">Drag and drop cameras from the roster on the left into this area to build your Command Center.</p>
+                        </div>
+                    ) : (
+                        activeCameras.map((camId) => {
+                            const cam = cameras.find(c => c.id === camId);
+                            if (!cam) return null;
+                            
+                            return (
+                                <div 
+                                    key={camId}
+                                    className="rounded-2xl overflow-hidden relative transition-all bg-slate-900 shadow-lg border border-slate-800 min-h-[300px] max-h-[80vh] flex flex-col"
+                                >
+                                    {/* Overlay Header */}
+                                    <div className="absolute top-3 left-3 z-10 text-white text-xs font-bold tracking-widest uppercase bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 cursor-pointer hover:bg-blue-600/80 transition-colors" onClick={() => setSelectedCam(cam)}>
+                                        {cam.label}
+                                    </div>
+                                    
+                                    {/* Close Button */}
+                                    <button 
+                                        onClick={() => clearCamera(camId)}
+                                        className="absolute top-3 right-3 z-10 text-white/70 hover:text-white bg-black/40 hover:bg-red-500/90 p-1.5 rounded-lg transition-colors"
+                                        title="Close Stream"
+                                    >
+                                        <X className="w-4 h-4" />
+                                    </button>
 
-                                        {/* Video Feed */}
+                                    {/* Video Feed */}
+                                    <div className="flex-1 w-full relative">
                                         {camStatus[cam.id] ? (
-                                            <div className="w-full h-full" onDoubleClick={() => setSelectedCam(cam)}>
+                                            <div className="absolute inset-0" onDoubleClick={() => setSelectedCam(cam)}>
                                                 <WebRTCPlayer camId={cam.id} onError={handleStreamError} />
                                             </div>
                                         ) : (
-                                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 bg-slate-950">
+                                            <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 bg-slate-950">
                                                 <AlertCircle className="w-8 h-8 mb-2 opacity-50" />
                                                 <span className="text-sm font-medium uppercase tracking-widest">Offline</span>
                                             </div>
                                         )}
-                                    </>
-                                ) : (
-                                    <div className="text-slate-400 flex flex-col items-center pointer-events-none">
-                                        <MonitorPlay className="w-10 h-10 mb-2 opacity-30" />
-                                        <span className="text-sm font-bold uppercase tracking-widest">Drag Camera Here</span>
                                     </div>
-                                )}
-                            </div>
-                        );
-                    })}
+                                </div>
+                            );
+                        })
+                    )}
                 </div>
             </div>
 
