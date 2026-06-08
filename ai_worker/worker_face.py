@@ -5,9 +5,15 @@ import json
 import base64
 import os
 import time
+import argparse
+import sys
 import psycopg2
 from pymilvus import MilvusClient
 from insightface.app import FaceAnalysis
+
+parser = argparse.ArgumentParser(description="AI Face Worker")
+parser.add_argument("--mode", type=str, default="live", choices=["live", "historic"])
+args = parser.parse_args()
 
 # ─────────────────────────────────────────
 # CONFIGURATION — Tune these values
@@ -100,11 +106,52 @@ print("✅ Face Worker Online. Awaiting frames from YOLO pre-filter...")
 # ─────────────────────────────────────────
 while True:
     try:
-        # 1. Pull from Redis Queue
-        queue_name, msg = r.brpop("face_ready_queue", timeout=0)
+        # 1. Pull from Redis Queue (Enterprise Round-Robin)
+        if args.mode == "live":
+            queue_name, msg = r.brpop("face_ready_queue", timeout=0)
+        else:
+            # Persistent Historic Worker: Round-Robin across all active sessions
+            active_queues = []
+            for key in r.scan_iter("historic_frames_queue:*"):
+                active_queues.append(key.decode('utf-8') if isinstance(key, bytes) else key)
+                
+            if not active_queues:
+                time.sleep(1)
+                continue
+                
+            frame_found = False
+            for q_name in active_queues:
+                # Use RPOP (FIFO) so we process chronologically and hit EOF last
+                msg = r.rpop(q_name)
+                if msg:
+                    queue_name = q_name
+                    frame_found = True
+                    break
+                    
+            if not frame_found:
+                time.sleep(1)
+                continue
+                
         payload   = json.loads(msg.decode('utf-8'))
+        
+        # --- EOF POISON PILL CHECK ---
+        if payload.get("status") == "EOF":
+            session_id = payload.get("session_id")
+            print(f"\n💊 [Session {session_id}] EOF Poison Pill. Extraction COMPLETE.")
+            # Update DB State Machine
+            try:
+                pg_cursor.execute("UPDATE historical_jobs SET status = 'COMPLETED' WHERE session_id = %s", (session_id,))
+            except Exception as e:
+                print(f"⚠️ Failed to update DB status for session {session_id}: {e}")
+            
+            # Clean up Redis Queue just in case
+            r.delete(queue_name)
+            
+            # DO NOT BREAK! Keep listening for other sessions.
+            continue
+            
         cam_id    = payload['camera_id']
-        timestamp = payload['timestamp']
+        timestamp = payload['timestamp'] # In historic mode, this is the TRUE forensic timestamp!
 
         # 2. Decode full frame
         img_bytes = base64.b64decode(payload['frame_data'])
@@ -372,7 +419,9 @@ while True:
                 except Exception as db_err:
                     print(f"⚠️ Live Alerts DB Insert Error: {db_err}")
 
-                r_pub.publish("live_face_alerts", json.dumps(alert_payload))
+                # ONLY broadcast to WebSockets if in Live Mode to prevent disturbing the Live Command Center
+                if args.mode == "live":
+                    r_pub.publish("live_face_alerts", json.dumps(alert_payload))
                 
             if is_armed:
                 if is_watchlist_match:

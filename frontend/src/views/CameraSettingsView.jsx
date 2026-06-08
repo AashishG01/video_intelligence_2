@@ -13,7 +13,13 @@ const CameraSettingsView = () => {
         camera_id: '',
         camera_name: '',
         place: '',
+        camera_type: 'ip', // 'ip' or 'nvr'
         rtsp_url: '',
+        nvr_brand: 'uniview',
+        nvr_ip: '',
+        nvr_user: '',
+        nvr_pass: '',
+        nvr_channel: '',
         fps_limit: 1,
         latitude: '',
         longitude: ''
@@ -54,7 +60,13 @@ const CameraSettingsView = () => {
                 camera_id: '',
                 camera_name: '',
                 place: '',
+                camera_type: 'ip',
                 rtsp_url: '',
+                nvr_brand: 'uniview',
+                nvr_ip: '',
+                nvr_user: '',
+                nvr_pass: '',
+                nvr_channel: '',
                 fps_limit: 1,
                 latitude: '',
                 longitude: ''
@@ -74,7 +86,13 @@ const CameraSettingsView = () => {
             camera_id: cam.camera_id,
             camera_name: cam.camera_name,
             place: cam.place || '',
-            rtsp_url: cam.rtsp_url,
+            camera_type: cam.nvr_ip ? 'nvr' : 'ip',
+            rtsp_url: cam.rtsp_url || '',
+            nvr_brand: cam.nvr_brand || 'uniview',
+            nvr_ip: cam.nvr_ip || '',
+            nvr_user: cam.nvr_user || '',
+            nvr_pass: cam.nvr_pass || '',
+            nvr_channel: cam.nvr_channel || '',
             fps_limit: cam.fps_limit,
             latitude: cam.latitude || '',
             longitude: cam.longitude || ''
@@ -84,7 +102,7 @@ const CameraSettingsView = () => {
     };
 
     const handleCancelEdit = () => {
-        setFormData({ camera_id: '', camera_name: '', place: '', rtsp_url: '', fps_limit: 1, latitude: '', longitude: '' });
+        setFormData({ camera_id: '', camera_name: '', place: '', camera_type: 'ip', rtsp_url: '', nvr_brand: 'uniview', nvr_ip: '', nvr_user: '', nvr_pass: '', nvr_channel: '', fps_limit: 1, latitude: '', longitude: '' });
         setIsEditing(false);
     };
 
@@ -196,18 +214,61 @@ const CameraSettingsView = () => {
                                 </div>
                             </div>
 
-                            <div>
-                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">RTSP Stream URL</label>
-                                <div className="relative">
-                                    <LinkIcon className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-                                    <input 
-                                        type="text" name="rtsp_url" required
-                                        value={formData.rtsp_url} onChange={handleInputChange}
-                                        placeholder="rtsp://admin:pass@ip:554/live"
-                                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
-                                    />
-                                </div>
+                            {/* Camera Type Toggle */}
+                            <div className="flex gap-4 mb-4">
+                                <label className={`flex-1 cursor-pointer py-2 text-center rounded-xl font-bold text-sm transition-all border ${formData.camera_type === 'ip' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
+                                    <input type="radio" name="camera_type" value="ip" checked={formData.camera_type === 'ip'} onChange={handleInputChange} className="hidden" />
+                                    Direct IP Camera
+                                </label>
+                                <label className={`flex-1 cursor-pointer py-2 text-center rounded-xl font-bold text-sm transition-all border ${formData.camera_type === 'nvr' ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
+                                    <input type="radio" name="camera_type" value="nvr" checked={formData.camera_type === 'nvr'} onChange={handleInputChange} className="hidden" />
+                                    NVR Channel
+                                </label>
                             </div>
+
+                            {formData.camera_type === 'ip' ? (
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">RTSP Stream URL</label>
+                                    <div className="relative">
+                                        <LinkIcon className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                                        <input 
+                                            type="text" name="rtsp_url" required={formData.camera_type === 'ip'}
+                                            value={formData.rtsp_url} onChange={handleInputChange}
+                                            placeholder="rtsp://admin:pass@ip:554/live"
+                                            className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
+                                        />
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">NVR Brand</label>
+                                            <select name="nvr_brand" value={formData.nvr_brand} onChange={handleInputChange} className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                                                <option value="uniview">Uniview (UNV)</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">NVR IP</label>
+                                            <input type="text" name="nvr_ip" required={formData.camera_type === 'nvr'} value={formData.nvr_ip} onChange={handleInputChange} placeholder="172.16.0.160" className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Username</label>
+                                            <input type="text" name="nvr_user" required={formData.camera_type === 'nvr'} value={formData.nvr_user} onChange={handleInputChange} placeholder="admin" className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Password</label>
+                                            <input type="password" name="nvr_pass" required={formData.camera_type === 'nvr'} value={formData.nvr_pass} onChange={handleInputChange} placeholder="***" className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Channel</label>
+                                            <input type="number" name="nvr_channel" required={formData.camera_type === 'nvr'} value={formData.nvr_channel} onChange={handleInputChange} placeholder="1" className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
 
                             <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">AI Processing FPS Limit</label>

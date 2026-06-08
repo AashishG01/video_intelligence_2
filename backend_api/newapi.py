@@ -367,6 +367,18 @@ def startup_db_check():
         except Exception:
             pass # Columns already exist
 
+        # Auto-migrate NVR columns if they don't exist
+        try:
+            cursor.execute("ALTER TABLE cameras ALTER COLUMN rtsp_url DROP NOT NULL;")
+            cursor.execute("ALTER TABLE cameras ADD COLUMN nvr_brand VARCHAR(50);")
+            cursor.execute("ALTER TABLE cameras ADD COLUMN nvr_ip VARCHAR(50);")
+            cursor.execute("ALTER TABLE cameras ADD COLUMN nvr_user VARCHAR(50);")
+            cursor.execute("ALTER TABLE cameras ADD COLUMN nvr_pass VARCHAR(50);")
+            cursor.execute("ALTER TABLE cameras ADD COLUMN nvr_channel INTEGER;")
+            print("✅ Auto-migrated cameras table (Added NVR support).")
+        except Exception:
+            pass # Columns already exist
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS live_alerts (
                 id SERIAL PRIMARY KEY,
@@ -383,6 +395,16 @@ def startup_db_check():
             );
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_live_alerts_ts ON live_alerts(timestamp DESC);")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS historical_jobs (
+                id SERIAL PRIMARY KEY,
+                session_id VARCHAR(100) UNIQUE NOT NULL,
+                camera_id VARCHAR(50) NOT NULL,
+                status VARCHAR(50) DEFAULT 'IN_PROGRESS',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
 
         # Legacy watchlist table removed to prevent Split-Brain Architecture
         
@@ -546,6 +568,61 @@ async def get_person_timeline(person_id: str):
         "locations": list(locations),
         "timeline": timeline
     }
+
+# ==========================================
+# 8.5 NVR TIME MACHINE SEARCH
+# ==========================================
+import uuid
+import subprocess
+from fastapi import BackgroundTasks
+
+class NVRSearchRequest(BaseModel):
+    camera_id: str
+    start_time: int
+    end_time: int
+
+def run_nvr_historic_extraction(camera_id: str, start_time: int, end_time: int, session_id: str):
+    script_path = os.path.join("..", "Ingestion", "producer_historic.py")
+    subprocess.run([
+        "python", script_path,
+        "--camera_id", camera_id,
+        "--start", str(start_time),
+        "--end", str(end_time),
+        "--session", session_id
+    ])
+
+@app.post("/api/investigate/nvr_search")
+async def start_nvr_search(req: NVRSearchRequest, background_tasks: BackgroundTasks):
+    session_id = str(uuid.uuid4())
+    conn = get_pg_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO historical_jobs (session_id, camera_id, status)
+            VALUES (%s, %s, 'IN_PROGRESS')
+        """, (session_id, req.camera_id))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+    background_tasks.add_task(run_nvr_historic_extraction, req.camera_id, req.start_time, req.end_time, session_id)
+    return {"status": "success", "session_id": session_id}
+
+@app.get("/api/investigate/status/{session_id}")
+async def get_nvr_search_status(session_id: str):
+    conn = get_pg_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT status FROM historical_jobs WHERE session_id = %s", (session_id,))
+    job = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"status": job['status']}
 
 
 # ==========================================
@@ -1052,17 +1129,22 @@ class CameraConfig(BaseModel):
     camera_id: str
     camera_name: str
     place: str = ""
-    rtsp_url: str
+    rtsp_url: Optional[str] = None
     fps_limit: int = Field(default=1, ge=1, le=30, description="Frames per second limit (1-30)")
     latitude: Optional[float] = Field(default=None, ge=-90.0, le=90.0)
     longitude: Optional[float] = Field(default=None, ge=-180.0, le=180.0)
+    nvr_brand: Optional[str] = None
+    nvr_ip: Optional[str] = None
+    nvr_user: Optional[str] = None
+    nvr_pass: Optional[str] = None
+    nvr_channel: Optional[int] = None
 
 @app.get("/api/cameras")
 async def get_cameras():
     conn = get_pg_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        cursor.execute("SELECT id, camera_id, camera_name, place, rtsp_url, fps_limit, is_active, latitude, longitude FROM cameras ORDER BY created_at DESC")
+        cursor.execute("SELECT id, camera_id, camera_name, place, rtsp_url, fps_limit, is_active, latitude, longitude, nvr_brand, nvr_ip, nvr_user, nvr_pass, nvr_channel FROM cameras ORDER BY created_at DESC")
         cameras = cursor.fetchall()
         
         # Cross-reference with MediaMTX to determine true stream health
@@ -1090,9 +1172,9 @@ async def add_camera(cam: CameraConfig, admin_user: dict = Depends(require_admin
     try:
         # We explicitly do NOT use ON CONFLICT DO UPDATE to prevent silent overwrites.
         cursor.execute("""
-            INSERT INTO cameras (camera_id, camera_name, place, rtsp_url, fps_limit, is_active, latitude, longitude)
-            VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s)
-        """, (cam.camera_id, cam.camera_name, cam.place, cam.rtsp_url, cam.fps_limit, cam.latitude, cam.longitude))
+            INSERT INTO cameras (camera_id, camera_name, place, rtsp_url, fps_limit, is_active, latitude, longitude, nvr_brand, nvr_ip, nvr_user, nvr_pass, nvr_channel)
+            VALUES (%s, %s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s)
+        """, (cam.camera_id, cam.camera_name, cam.place, cam.rtsp_url, cam.fps_limit, cam.latitude, cam.longitude, cam.nvr_brand, cam.nvr_ip, cam.nvr_user, cam.nvr_pass, cam.nvr_channel))
         conn.commit()
     except psycopg2.IntegrityError:
         conn.rollback()
@@ -1104,8 +1186,16 @@ async def add_camera(cam: CameraConfig, admin_user: dict = Depends(require_admin
         cursor.close()
         conn.close()
     
+    # Calculate effective RTSP URL for MediaMTX
+    active_rtsp_url = cam.rtsp_url
+    if not active_rtsp_url and cam.nvr_brand == 'uniview':
+        import urllib.parse
+        encoded_pass = urllib.parse.quote(cam.nvr_pass or "")
+        active_rtsp_url = f"rtsp://{cam.nvr_user}:{encoded_pass}@{cam.nvr_ip}:554/unicast/c{cam.nvr_channel}/s1/live"
+        
     # Dynamically program MediaMTX to start routing this RTSP stream
-    sync_camera_to_mediamtx(cam.camera_id, cam.rtsp_url)
+    if active_rtsp_url:
+        sync_camera_to_mediamtx(cam.camera_id, active_rtsp_url)
     
     return {"status": "success", "message": "Camera enrolled and video route created"}
 
@@ -1123,9 +1213,9 @@ async def edit_camera(camera_id: str, cam: CameraConfig, admin_user: dict = Depe
         
         cursor.execute("""
             UPDATE cameras
-            SET camera_name = %s, place = %s, rtsp_url = %s, fps_limit = %s, latitude = %s, longitude = %s
+            SET camera_name = %s, place = %s, rtsp_url = %s, fps_limit = %s, latitude = %s, longitude = %s, nvr_brand = %s, nvr_ip = %s, nvr_user = %s, nvr_pass = %s, nvr_channel = %s
             WHERE camera_id = %s
-        """, (cam.camera_name, cam.place, cam.rtsp_url, cam.fps_limit, cam.latitude, cam.longitude, camera_id))
+        """, (cam.camera_name, cam.place, cam.rtsp_url, cam.fps_limit, cam.latitude, cam.longitude, cam.nvr_brand, cam.nvr_ip, cam.nvr_user, cam.nvr_pass, cam.nvr_channel, camera_id))
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -1134,9 +1224,20 @@ async def edit_camera(camera_id: str, cam: CameraConfig, admin_user: dict = Depe
         cursor.close()
         conn.close()
         
+    # Calculate effective new RTSP URL for MediaMTX
+    active_rtsp_url = cam.rtsp_url
+    if not active_rtsp_url and cam.nvr_brand == 'uniview':
+        import urllib.parse
+        encoded_pass = urllib.parse.quote(cam.nvr_pass or "")
+        active_rtsp_url = f"rtsp://{cam.nvr_user}:{encoded_pass}@{cam.nvr_ip}:554/unicast/c{cam.nvr_channel}/s1/live"
+
     # Only restart MediaMTX if the video stream URL actually changed
-    if old_rtsp != cam.rtsp_url:
-        sync_camera_to_mediamtx(camera_id, cam.rtsp_url)
+    old_active_rtsp_url = old_rtsp
+    # Try to guess the old active rtsp url if it was an nvr. We might not have it in `existing`, but old_rtsp is what was stored in the db.
+    # Actually, it's safer to always sync if there's a possibility it changed.
+    # We will just sync it if active_rtsp_url is not None
+    if active_rtsp_url:
+        sync_camera_to_mediamtx(camera_id, active_rtsp_url)
         
     return {"status": "success", "message": "Camera updated successfully"}
 

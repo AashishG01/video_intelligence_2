@@ -1,0 +1,133 @@
+import cv2
+import time
+import redis
+import json
+import base64
+import os
+import argparse
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import urllib.parse
+
+# Force TCP for RTSP to prevent UDP packet loss
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+
+# Connect to local Redis
+r = redis.Redis(host='localhost', port=6379, db=0)
+
+def get_nvr_config(camera_id):
+    """Fetch NVR parameters for a camera from the PostgreSQL database."""
+    try:
+        conn = psycopg2.connect(
+            dbname="surveillance",
+            user="admin",
+            password="password",
+            host="localhost",
+            port="5432"
+        )
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT nvr_brand, nvr_ip, nvr_user, nvr_pass, nvr_channel FROM cameras WHERE camera_id = %s", (camera_id,))
+        cam = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return cam
+    except Exception as e:
+        print(f"⚠️ Failed to fetch NVR config from DB: {e}")
+        return None
+
+def main():
+    parser = argparse.ArgumentParser(description="Time Machine: NVR Historical Extractor")
+    parser.add_argument("--camera_id", type=str, required=True, help="Camera ID in DB")
+    parser.add_argument("--start", type=int, required=True, help="Start Unix Timestamp")
+    parser.add_argument("--end", type=int, required=True, help="End Unix Timestamp")
+    parser.add_argument("--session", type=str, required=True, help="Unique Session ID for queue isolation")
+    args = parser.parse_args()
+
+    print(f"🕰️ TIME MACHINE INITIALIZED for {args.camera_id}")
+    print(f"   Session ID: {args.session}")
+    print(f"   Time Window: {args.start} -> {args.end}")
+
+    cam = get_nvr_config(args.camera_id)
+    if not cam or cam.get('nvr_brand') != 'uniview':
+        print(f"❌ Error: Camera '{args.camera_id}' is not configured as a Uniview NVR.")
+        return
+
+    # 1. Build Replay URL
+    encoded_pass = urllib.parse.quote(cam.get('nvr_pass') or "")
+    replay_url = f"rtsp://{cam['nvr_user']}:{encoded_pass}@{cam['nvr_ip']}:554/c{cam['nvr_channel']}/b{args.start}/e{args.end}/replay"
+    
+    queue_name = f"historic_frames_queue:{args.session}"
+    
+    print(f"⏳ Connecting to NVR stream...")
+    cap = cv2.VideoCapture(replay_url, cv2.CAP_FFMPEG)
+    
+    if not cap.isOpened():
+        print(f"❌ Failed to connect to NVR replay stream.")
+        return
+
+    original_fps = cap.get(cv2.CAP_PROP_FPS)
+    if not original_fps or original_fps <= 0:
+        original_fps = 25.0 # Fallback to Uniview default
+        
+    print(f"✅ Stream Connected! Original FPS: {original_fps}")
+
+    # Aggressive Frame Skipping (Targeting ~3 FPS for AI)
+    # If original is 25 fps, we skip ~8 frames for every 1 processed.
+    target_fps = 3.0
+    skip_interval = max(1, int(original_fps / target_fps))
+    
+    frame_count = 0
+    processed_count = 0
+
+    while True:
+        # --- Redis OOM Protection (Backpressure) ---
+        while r.llen(queue_name) > 500:
+            print(f"⚠️ [BACKPRESSURE] Queue full (500). Pausing extraction to let AI catch up...", end='\r')
+            time.sleep(1.0)
+
+        ret, frame = cap.read()
+        if not ret:
+            print("\n🛑 End of File (EOF) reached.")
+            break
+
+        frame_count += 1
+        
+        # Frame Skipping
+        if frame_count % skip_interval != 0:
+            continue
+
+        # --- True Forensic Timestamp Calculation ---
+        # The true time of this frame is exactly how many seconds into the video it is.
+        seconds_elapsed = frame_count / original_fps
+        true_timestamp = args.start + seconds_elapsed
+
+        # Optimization: Resize slightly to speed up AI & save Redis RAM
+        ai_frame = cv2.resize(frame, (1280, 720))
+        _, ai_buffer = cv2.imencode('.jpg', ai_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+        ai_base64 = base64.b64encode(ai_buffer).decode('utf-8')
+        
+        payload = {
+            "session_id": args.session,
+            "camera_id": args.camera_id,
+            "timestamp": true_timestamp, # TRUST THIS TIME!
+            "frame_data": ai_base64
+        }
+        
+        # Push to isolated session queue
+        r.lpush(queue_name, json.dumps(payload))
+        processed_count += 1
+        
+        if processed_count % 10 == 0:
+            print(f"🚀 Extracted & Pushed {processed_count} frames to {queue_name}...", end='\r')
+
+    cap.release()
+    
+    # --- EOF Poison Pill ---
+    print("\n💊 Injecting EOF Poison Pill into queue...")
+    eof_payload = {"status": "EOF", "camera_id": args.camera_id, "session_id": args.session}
+    r.lpush(queue_name, json.dumps(eof_payload))
+    
+    print("✅ Time Machine Extraction Complete and Safely Shut Down.")
+
+if __name__ == "__main__":
+    main()

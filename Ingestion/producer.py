@@ -31,47 +31,68 @@ class CameraProducer(threading.Thread):
         cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
         # Keep buffer tiny so we only grab the absolute freshest frame
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+        
+        backoff = 2
 
         while self.running:
-            start_time = time.time()
+            try:
+                start_time = time.time()
+                
+                ret, frame = cap.read()
+                if not ret:
+                    print(f"[{self.camera_id}] ⚠️ Stream dropped. Reconnecting in {backoff}s...")
+                    cap.release()
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, 60) # Exponential backoff up to 60s
+                    cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+                    continue
+                
+                # Successful read resets backoff
+                backoff = 2
             
-            ret, frame = cap.read()
-            if not ret:
-                print(f"[{self.camera_id}] ⚠️ Stream dropped. Reconnecting in 5s...")
-                cap.release()
-                time.sleep(5)
-                cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-                continue
-            
-            # --------------------------------------------------
-            # TASK 1: Feed the AI Workers (High Quality, 720p)
-            # --------------------------------------------------
-            ai_frame = cv2.resize(frame, (1280, 720))
-            _, ai_buffer = cv2.imencode('.jpg', ai_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
-            ai_base64 = base64.b64encode(ai_buffer).decode('utf-8')
-            
-            payload = {
-                "camera_id": self.camera_id,
-                "timestamp": time.time(),
-                "frame_data": ai_base64
-            }
-            
-            # Push to the AI queue
-            r.lpush("raw_frames_queue", json.dumps(payload))
-            # Prevent RAM explosion if AI crashes
-            r.ltrim("raw_frames_queue", 0, 1000) 
-            
-            # TASK 2 (Web Feed) IS DELETED! 🚀 Frontend is handling it natively via WebRTC!
-            
-            # --------------------------------------------------
-            # Enforce Indian Street Density FPS Limits (Tier 1 = 1 FPS)
-            # --------------------------------------------------
-            elapsed = time.time() - start_time
-            sleep_time = max(0, (1.0 / self.fps_limit) - elapsed)
-            time.sleep(sleep_time)
+                # --------------------------------------------------
+                # TASK 1: Feed the AI Workers (High Quality, 720p)
+                # --------------------------------------------------
+                ai_frame = cv2.resize(frame, (1280, 720))
+                _, ai_buffer = cv2.imencode('.jpg', ai_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+                ai_base64 = base64.b64encode(ai_buffer).decode('utf-8')
+                
+                payload = {
+                    "camera_id": self.camera_id,
+                    "timestamp": time.time(),
+                    "frame_data": ai_base64
+                }
+                
+                # Push to the AI queue
+                r.lpush("raw_frames_queue", json.dumps(payload))
+                # Prevent RAM explosion if AI crashes
+                r.ltrim("raw_frames_queue", 0, 1000) 
+                
+                # TASK 2 (Web Feed) IS DELETED! 🚀 Frontend is handling it natively via WebRTC!
+                
+                # --------------------------------------------------
+                # Enforce Indian Street Density FPS Limits (Tier 1 = 1 FPS)
+                # --------------------------------------------------
+                elapsed = time.time() - start_time
+                sleep_time = max(0, (1.0 / self.fps_limit) - elapsed)
+                time.sleep(sleep_time)
+
+            except Exception as e:
+                print(f"[{self.camera_id}] ❌ Stream Exception: {e}")
+                time.sleep(1)
 
         cap.release()
+
+def build_camera_url(cam):
+    """Smart Router: Returns direct RTSP or dynamically builds NVR string."""
+    if cam.get('rtsp_url'):
+        return cam['rtsp_url']
+    elif cam.get('nvr_brand') == 'uniview':
+        import urllib.parse
+        encoded_pass = urllib.parse.quote(cam.get('nvr_pass') or "")
+        return f"rtsp://{cam['nvr_user']}:{encoded_pass}@{cam['nvr_ip']}:554/unicast/c{cam['nvr_channel']}/s1/live"
+    return None
 
 def get_active_cameras():
     """Fetch active cameras from the PostgreSQL database."""
@@ -84,11 +105,16 @@ def get_active_cameras():
             port="5432"
         )
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT camera_id, rtsp_url, fps_limit FROM cameras WHERE is_active = TRUE")
+        cursor.execute("SELECT camera_id, rtsp_url, fps_limit, nvr_brand, nvr_ip, nvr_user, nvr_pass, nvr_channel FROM cameras WHERE is_active = TRUE")
         cameras = cursor.fetchall()
         cursor.close()
         conn.close()
-        return {cam['camera_id']: cam for cam in cameras}
+        
+        # Build URLs
+        for cam in cameras:
+            cam['resolved_url'] = build_camera_url(cam)
+            
+        return {cam['camera_id']: cam for cam in cameras if cam.get('resolved_url')}
     except Exception as e:
         print(f"⚠️ Failed to fetch cameras from DB: {e}")
         return None
@@ -119,7 +145,7 @@ if __name__ == "__main__":
                     for cam_id in db_camera_ids - running_camera_ids:
                         cam_info = db_cameras[cam_id]
                         print(f"\n🎥 [NEW CAMERA DETECTED] Starting {cam_id}...")
-                        t = CameraProducer(cam_id, cam_info['rtsp_url'], fps_limit=cam_info['fps_limit'])
+                        t = CameraProducer(cam_id, cam_info['resolved_url'], fps_limit=cam_info['fps_limit'])
                         t.start()
                         active_threads[cam_id] = t
                         
@@ -135,11 +161,11 @@ if __name__ == "__main__":
                         cam_info = db_cameras[cam_id]
                         running_thread = active_threads[cam_id]
                         
-                        if running_thread.rtsp_url != cam_info['rtsp_url'] or running_thread.fps_limit != cam_info['fps_limit']:
+                        if running_thread.rtsp_url != cam_info['resolved_url'] or running_thread.fps_limit != cam_info['fps_limit']:
                             print(f"\n⚙️ [CONFIG CHANGED] Restarting {cam_id}...")
                             running_thread.running = False
                             
-                            t = CameraProducer(cam_id, cam_info['rtsp_url'], fps_limit=cam_info['fps_limit'])
+                            t = CameraProducer(cam_id, cam_info['resolved_url'], fps_limit=cam_info['fps_limit'])
                             t.start()
                             active_threads[cam_id] = t
                             

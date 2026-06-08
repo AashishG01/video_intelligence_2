@@ -260,6 +260,75 @@ const InvestigatorView = () => {
     const [idSearchError, setIdSearchError] = useState(null);
     const [personDossier, setPersonDossier] = useState(null);
 
+    // NVR Search State
+    const [cameras, setCameras] = useState([]);
+    const [nvrForm, setNvrForm] = useState({ camera_id: '', start_time: '', end_time: '' });
+    const [nvrSessionId, setNvrSessionId] = useState(null);
+    const [nvrStatus, setNvrStatus] = useState(null);
+    const [nvrError, setNvrError] = useState(null);
+
+    useEffect(() => {
+        if (activeTab === 'NVR_SEARCH' && cameras.length === 0) {
+            fetch(`${BACKEND_URL}/api/cameras`)
+                .then(r => r.json())
+                .then(data => setCameras(data.filter(c => c.nvr_brand)))
+                .catch(e => console.error("Error fetching cameras:", e));
+        }
+    }, [activeTab]);
+
+    useEffect(() => {
+        let interval;
+        if (nvrSessionId && nvrStatus !== 'COMPLETED') {
+            interval = setInterval(async () => {
+                try {
+                    const res = await fetch(`${BACKEND_URL}/api/investigate/status/${nvrSessionId}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        setNvrStatus(data.status);
+                        if (data.status === 'COMPLETED') {
+                            clearInterval(interval);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Status check failed", e);
+                }
+            }, 3000);
+        }
+        return () => clearInterval(interval);
+    }, [nvrSessionId, nvrStatus]);
+
+    const handleNvrSubmit = async () => {
+        if (!nvrForm.camera_id || !nvrForm.start_time || !nvrForm.end_time) {
+            setNvrError("Please fill out all fields.");
+            return;
+        }
+        setNvrError(null);
+        setNvrSessionId(null);
+        setNvrStatus('STARTING...');
+
+        const start_ts = Math.floor(new Date(nvrForm.start_time).getTime() / 1000);
+        const end_ts = Math.floor(new Date(nvrForm.end_time).getTime() / 1000);
+
+        try {
+            const res = await fetch(`${BACKEND_URL}/api/investigate/nvr_search`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    camera_id: nvrForm.camera_id,
+                    start_time: start_ts,
+                    end_time: end_ts
+                })
+            });
+            if (!res.ok) throw new Error("Failed to start NVR extraction.");
+            const data = await res.json();
+            setNvrSessionId(data.session_id);
+            setNvrStatus('IN_PROGRESS');
+        } catch (err) {
+            setNvrError(err.message);
+            setNvrStatus(null);
+        }
+    };
+
     const handleFileSelect = (e) => {
         const file = e.target.files[0];
         if (file) {
@@ -353,7 +422,98 @@ const InvestigatorView = () => {
                 <button onClick={() => setActiveTab('ID_SEARCH')} className={`flex-1 flex items-center justify-center px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${activeTab === 'ID_SEARCH' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>
                     <Hash className="w-4 h-4 mr-2" /> Dossier Search
                 </button>
+                <button onClick={() => setActiveTab('NVR_SEARCH')} className={`flex-1 flex items-center justify-center px-4 py-2.5 rounded-lg font-medium text-sm transition-all ${activeTab === 'NVR_SEARCH' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>
+                    <Clock className="w-4 h-4 mr-2" /> NVR Time Machine
+                </button>
             </div>
+
+            {activeTab === 'NVR_SEARCH' && (
+                <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm mb-6">
+                    <h3 className="text-lg font-bold text-slate-800 flex items-center mb-4">
+                        <Clock className="w-5 h-5 mr-2 text-indigo-500" />
+                        Extract Historical NVR Footage
+                    </h3>
+                    <p className="text-sm text-slate-500 mb-6">
+                        Select an NVR camera and a time window. The AI will securely extract frames in the background without locking up the UI.
+                    </p>
+
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-semibold text-slate-700 mb-1">Select NVR Camera</label>
+                            <select 
+                                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:border-indigo-500 text-sm"
+                                value={nvrForm.camera_id}
+                                onChange={(e) => setNvrForm({...nvrForm, camera_id: e.target.value})}
+                                disabled={nvrStatus === 'IN_PROGRESS' || nvrStatus === 'STARTING...'}
+                            >
+                                <option value="">-- Select Camera --</option>
+                                {cameras.map(c => (
+                                    <option key={c.camera_id} value={c.camera_id}>{c.name} ({c.camera_id})</option>
+                                ))}
+                            </select>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 mb-1">Start Time</label>
+                                <input 
+                                    type="datetime-local" 
+                                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:border-indigo-500 text-sm"
+                                    value={nvrForm.start_time}
+                                    onChange={(e) => setNvrForm({...nvrForm, start_time: e.target.value})}
+                                    disabled={nvrStatus === 'IN_PROGRESS' || nvrStatus === 'STARTING...'}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-semibold text-slate-700 mb-1">End Time</label>
+                                <input 
+                                    type="datetime-local" 
+                                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg outline-none focus:border-indigo-500 text-sm"
+                                    value={nvrForm.end_time}
+                                    onChange={(e) => setNvrForm({...nvrForm, end_time: e.target.value})}
+                                    disabled={nvrStatus === 'IN_PROGRESS' || nvrStatus === 'STARTING...'}
+                                />
+                            </div>
+                        </div>
+
+                        {nvrError && (
+                            <div className="p-3 bg-red-50 text-red-700 text-sm font-medium rounded-lg flex items-center">
+                                <AlertCircle className="w-4 h-4 mr-2" /> {nvrError}
+                            </div>
+                        )}
+
+                        <div className="pt-4 flex justify-end">
+                            <button 
+                                onClick={handleNvrSubmit}
+                                disabled={nvrStatus === 'IN_PROGRESS' || nvrStatus === 'STARTING...'}
+                                className="bg-indigo-600 text-white font-bold px-6 py-2.5 rounded-lg hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+                            >
+                                {nvrStatus === 'IN_PROGRESS' || nvrStatus === 'STARTING...' ? (
+                                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Processing...</>
+                                ) : (
+                                    <><Search className="w-4 h-4 mr-2" /> Start Extraction</>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+
+                    {nvrStatus === 'COMPLETED' && (
+                        <div className="mt-6 p-4 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 flex flex-col items-center justify-center text-center">
+                            <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center mb-2">
+                                <Search className="w-5 h-5 text-emerald-600" />
+                            </div>
+                            <h4 className="font-bold text-lg">Extraction Complete!</h4>
+                            <p className="text-sm mt-1 mb-3">The footage has been processed by the AI worker.</p>
+                            <button 
+                                onClick={() => { setNvrStatus(null); setNvrSessionId(null); setActiveTab('ID_SEARCH'); }}
+                                className="bg-emerald-600 text-white font-bold px-4 py-2 rounded shadow-sm hover:bg-emerald-700 transition-colors text-sm"
+                            >
+                                Jump to Dossier Search
+                            </button>
+                        </div>
+                    )}
+                </div>
+            )}
 
             {activeTab === 'IMG_SEARCH' && (
                 <>
