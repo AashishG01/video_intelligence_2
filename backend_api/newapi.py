@@ -447,9 +447,12 @@ WATCHLIST_COLLECTION = "watchlist_faces"
 @app.post("/api/investigate/search_by_image")
 async def search_by_image(
     file: UploadFile = File(...),
-    threshold: float = Query(0.50, description="Similarity threshold")
+    threshold: float = Query(0.50, description="Similarity threshold"),
+    camera_id: str = Query(None, description="Optional filter by camera"),
+    start_time: int = Query(None, description="Optional start timestamp filter"),
+    end_time: int = Query(None, description="Optional end timestamp filter")
 ):
-    """Searches Milvus and formats the DB image paths correctly for the React UI."""
+    """Searches Milvus and formats the DB image paths correctly for the React UI, with optional filtering."""
     contents = await file.read()
     nparr = np.frombuffer(contents, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -481,11 +484,24 @@ async def search_by_image(
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         for match in search_res[0]:
-            # Convert UI Similarity % (e.g. 0.75) to Milvus Max Allowed Distance (0.25)
             max_allowed_distance = 1.0 - threshold
             if match['distance'] <= max_allowed_distance:
                 person_id = match['entity']['person_id']
-                cursor.execute("SELECT camera_id, timestamp, image_path FROM sightings WHERE person_id = %s", (person_id,))
+                
+                query = "SELECT camera_id, timestamp, image_path FROM sightings WHERE person_id = %s"
+                params = [person_id]
+                
+                if camera_id:
+                    query += " AND camera_id = %s"
+                    params.append(camera_id)
+                if start_time is not None:
+                    query += " AND timestamp >= %s"
+                    params.append(start_time)
+                if end_time is not None:
+                    query += " AND timestamp <= %s"
+                    params.append(end_time)
+                    
+                cursor.execute(query, tuple(params))
                 pg_records = cursor.fetchall()
                 
                 for record in pg_records:

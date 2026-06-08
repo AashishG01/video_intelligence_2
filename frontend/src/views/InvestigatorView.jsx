@@ -356,7 +356,7 @@ const InvestigatorView = () => {
         if (fileInputRef.current) fileInputRef.current.value = "";
     };
 
-    const handleSearch = async () => {
+    const handleSearch = async (filters = null) => {
         if (!processedFile) { setErrorMsg("Please enhance and crop a photo first."); return; }
         setIsSearching(true);
         setErrorMsg(null);
@@ -364,8 +364,13 @@ const InvestigatorView = () => {
         const formData = new FormData();
         formData.append("file", processedFile); 
 
+        let url = `${BACKEND_URL}/api/investigate/search_by_image?threshold=${searchThreshold}`;
+        if (filters && filters.camera_id) url += `&camera_id=${encodeURIComponent(filters.camera_id)}`;
+        if (filters && filters.start_time) url += `&start_time=${filters.start_time}`;
+        if (filters && filters.end_time) url += `&end_time=${filters.end_time}`;
+
         try {
-            const response = await fetch(`${BACKEND_URL}/api/investigate/search_by_image?threshold=${searchThreshold}`, {
+            const response = await fetch(url, {
                 method: 'POST',
                 body: formData,
             });
@@ -534,7 +539,14 @@ const InvestigatorView = () => {
                             <p className="text-sm mt-1 mb-3">The footage has been processed by the AI worker.</p>
                             {processedFile ? (
                                 <button 
-                                    onClick={() => { setNvrStatus(null); setNvrSessionId(null); setActiveTab('IMG_SEARCH'); setTimeout(handleSearch, 300); }}
+                                    onClick={() => { 
+                                        setNvrStatus(null); 
+                                        setNvrSessionId(null); 
+                                        setActiveTab('IMG_SEARCH'); 
+                                        const start_ts = Math.floor(new Date(nvrForm.start_time).getTime() / 1000);
+                                        const end_ts = Math.floor(new Date(nvrForm.end_time).getTime() / 1000);
+                                        setTimeout(() => handleSearch({ camera_id: nvrForm.camera_id, start_time: start_ts, end_time: end_ts }), 300); 
+                                    }}
                                     className="bg-blue-600 text-white font-bold px-6 py-2.5 rounded-lg shadow-md hover:bg-blue-700 transition-colors text-sm flex items-center"
                                 >
                                     <UserSearch className="w-4 h-4 mr-2" /> Auto-Search Suspect Now
