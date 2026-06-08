@@ -32,9 +32,19 @@ def _sync_scan_nvr(ip, port, user, password):
                 req.StreamSetup = {'Stream': 'RTP-Unicast', 'Transport': {'Protocol': 'RTSP'}}
                 uri = media_service.GetStreamUri(req)
                 
+                # INJECTION FIX: ONVIF returns raw unauthenticated URLs (e.g. rtsp://192.168.1.100:554/...)
+                # We must inject the url-encoded username and password or OpenCV will throw 401 Unauthorized
+                import urllib.parse
+                safe_pass = urllib.parse.quote(password)
+                raw_uri = uri.Uri
+                if raw_uri.startswith("rtsp://"):
+                    auth_uri = raw_uri.replace("rtsp://", f"rtsp://{user}:{safe_pass}@", 1)
+                else:
+                    auth_uri = raw_uri
+                
                 cameras.append({
                     "name": profile.Name,
-                    "rtsp_url": uri.Uri,
+                    "rtsp_url": auth_uri,
                     "camera_id": f"cam_{profile.Name.lower().replace(' ', '_')}"
                 })
             except Exception as e:
