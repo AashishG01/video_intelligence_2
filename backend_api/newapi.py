@@ -1389,9 +1389,13 @@ async def validate_camera_stream(camera: dict) -> dict:
 
 @app.post("/api/nvr/bulk_import")
 async def bulk_import_cameras(selected_cameras: list[dict]):
-    # Fire all validation pings concurrently. 16 cameras take the same time as 1 camera.
-    validation_tasks = [validate_camera_stream(cam) for cam in selected_cameras]
-    validated_results = await asyncio.gather(*validation_tasks)
+    # Validate streams ONE AT A TIME to avoid exhausting NVR's RTSP connection limit.
+    # Uniview NVRs typically allow only 4-6 simultaneous connections.
+    validated_results = []
+    for cam in selected_cameras:
+        result = await validate_camera_stream(cam)
+        logger.info(f"  → {cam.get('name', cam.get('camera_id'))}: {'✅ ALIVE' if result['is_alive'] else '❌ GHOST'}")
+        validated_results.append(result)
     
     # Filter out the ghosts
     alive_cameras = [cam for cam in validated_results if cam['is_alive']]
