@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, Loader2, X, CheckSquare, AlertTriangle, ShieldCheck, RefreshCw } from 'lucide-react';
+import { Search, Loader2, X, CheckSquare, AlertTriangle, ShieldCheck, RefreshCw, Eye, EyeOff } from 'lucide-react';
 import api from '../api';
 
 const NvrDiscoveryModal = ({ isOpen, onClose, onImportSuccess }) => {
@@ -8,6 +8,7 @@ const NvrDiscoveryModal = ({ isOpen, onClose, onImportSuccess }) => {
     const [discoveredCameras, setDiscoveredCameras] = useState([]);
     const [selectedCameras, setSelectedCameras] = useState(new Set());
     const [importResult, setImportResult] = useState(null);
+    const [showPassword, setShowPassword] = useState(false);
 
     if (!isOpen) return null;
 
@@ -92,7 +93,21 @@ const NvrDiscoveryModal = ({ isOpen, onClose, onImportSuccess }) => {
                                 </div>
                                 <div>
                                     <label className="block text-xs font-bold text-slate-500 uppercase">Password</label>
-                                    <input type="password" className="mt-1 w-full border border-slate-200 rounded-lg p-3 bg-slate-50" value={credentials.password} onChange={e => setCredentials({...credentials, password: e.target.value})} />
+                                    <div className="relative mt-1">
+                                        <input 
+                                            type={showPassword ? "text" : "password"} 
+                                            className="w-full border border-slate-200 rounded-lg p-3 pr-10 bg-slate-50" 
+                                            value={credentials.password} 
+                                            onChange={e => setCredentials({...credentials, password: e.target.value})} 
+                                        />
+                                        <button 
+                                            type="button"
+                                            onClick={() => setShowPassword(!showPassword)}
+                                            className="absolute right-3 top-3.5 text-slate-400 hover:text-slate-600 focus:outline-none"
+                                        >
+                                            {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
