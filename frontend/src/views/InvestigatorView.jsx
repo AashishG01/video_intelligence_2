@@ -271,7 +271,7 @@ const InvestigatorView = () => {
         if (activeTab === 'NVR_SEARCH' && cameras.length === 0) {
             fetch(`${BACKEND_URL}/api/cameras`)
                 .then(r => r.json())
-                .then(data => setCameras(data.filter(c => c.nvr_brand)))
+                .then(data => setCameras(data))
                 .catch(e => console.error("Error fetching cameras:", e));
         }
     }, [activeTab]);
