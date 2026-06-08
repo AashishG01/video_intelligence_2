@@ -26,11 +26,15 @@ This document serves as the unified checklist for the system's development, comb
 
 ## ✅ Completed Objectives
 
-### UI/UX & Architecture
+### Architecture & Enterprise Standards
 - [x] **Complete UI Redesign:** Established a highly professional, modern, dark-mode appearance.
 - [x] **Terminology Cleanup:** Stripped out confusing technical jargon (e.g., replaced "WebRTC" and "RTSP" with user-friendly terms).
 - [x] **Database Architecture:** Migrated to a robust PostgreSQL setup (for metadata) alongside Milvus (for vector embeddings).
 - [x] **RBAC (Role-Based Access Control):** Implemented multi-tier admin/user login systems.
+- [x] **Enterprise Architecture Refactor:** Adopted SOLID principles and the Repository Pattern, completely decoupling SQL logic from FastAPI routes.
+- [x] **12-Factor Compliance:** Migrated all hardcoded credentials and configuration into a secure `.env` file and central `config.py`.
+- [x] **Observability Engine:** Replaced naked print statements with structured `loguru` logging across all asynchronous workers and eliminated silent failures.
+- [x] **Defensive Programming:** Implemented strict Pydantic validation boundaries and exception obfuscation to prevent data leakage.
 
 ### Live Dashboard & Monitoring
 - [x] **Active Target Panel:** Added a high-impact panel displaying the absolute latest detection side-by-side with their Watchlist reference image.
@@ -50,7 +54,8 @@ This document serves as the unified checklist for the system's development, comb
 
 ### Alerts & Notifications
 - [x] **Threat Alert Modal:** Added real-time popups to instantly flag critical events to operators.
-- [x] **System-Wide Alert Infrastructure:** Configured SMTP Email integrations and persistent database storage for all generated alerts.
+- [x] **System-Wide Alert Infrastructure:** Configured asynchronous SMTP Email integrations and persistent database storage for all generated alerts.
+- [x] **Asynchronous SMS Engine:** Built a fully non-blocking Twilio SMS pipeline with 160-character cost protections, E.164 normalization, and Redis anti-spam TTL locks.
 
 ---
 **Target Deadline:** 11th June 2026
