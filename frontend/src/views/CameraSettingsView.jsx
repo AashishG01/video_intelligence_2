@@ -343,14 +343,14 @@ const CameraSettingsView = () => {
                             {cameras.map((cam) => (
                                 <div key={cam.id} className="bg-white rounded-2xl p-5 border border-slate-200 shadow-md hover:shadow-xl transition-all group relative overflow-hidden">
                                     <div className="absolute top-0 left-0 w-1 h-full bg-blue-500"></div>
-                                    <div className="flex justify-between items-start">
-                                        <div>
-                                            <h3 className="text-lg font-bold text-slate-800 line-clamp-1">{cam.camera_name}</h3>
-                                            <div className="flex items-center text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded-md mt-1 w-max">
+                                    <div className="flex justify-between items-start gap-3">
+                                        <div className="min-w-0 flex-1">
+                                            <h3 className="text-lg font-bold text-slate-800 truncate pr-2" title={cam.camera_name}>{cam.camera_name}</h3>
+                                            <div className="flex items-center text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded-md mt-1 w-max max-w-full overflow-hidden text-ellipsis whitespace-nowrap" title={cam.camera_id}>
                                                 {cam.camera_id}
                                             </div>
                                         </div>
-                                        <div className="flex gap-1">
+                                        <div className="flex gap-1 shrink-0">
                                             <button 
                                                 onClick={() => handleEditClick(cam)}
                                                 className="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-2 rounded-lg transition-colors"
