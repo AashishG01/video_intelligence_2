@@ -1392,8 +1392,8 @@ async def bulk_import_cameras(selected_cameras: list[dict]):
         for cam in alive_cameras:
             # Default to 15 fps and "Auto-Discovered" location
             cursor.execute("""
-                INSERT INTO cameras (camera_id, name, location, rtsp_url, fps_limit)
-                VALUES (%s, %s, %s, %s, 15)
+                INSERT INTO cameras (camera_id, camera_name, place, rtsp_url, fps_limit, is_active)
+                VALUES (%s, %s, %s, %s, 15, TRUE)
                 ON CONFLICT (camera_id) DO UPDATE SET rtsp_url = EXCLUDED.rtsp_url
             """, (cam['camera_id'], cam['name'], "Auto-Discovered", cam['rtsp_url']))
         conn.commit()
