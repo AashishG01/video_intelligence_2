@@ -141,8 +141,8 @@ if not client.has_collection(collection_name=COLLECTION_NAME):
     
     index_params = client.prepare_index_params()
     index_params.add_index(field_name="embedding", metric_type="COSINE", index_type="IVF_FLAT", params={"nlist": 128})
-    client.create_collection(collection_name=COLLECTION_NAME, schema=schema)
-    client.create_index(collection_name=COLLECTION_NAME, index_params=index_params)
+    client.create_collection(collection_name=COLLECTION_NAME, schema=schema, index_params=index_params)
+    client.load_collection(collection_name=COLLECTION_NAME)
     print(f"✅ Milvus collection '{COLLECTION_NAME}' ready.")
 
 # --- Collection 2: watchlist_faces (Identity Search) ---
@@ -155,8 +155,8 @@ if not client.has_collection(collection_name=WATCHLIST_COLLECTION):
     
     wl_index = client.prepare_index_params()
     wl_index.add_index(field_name="embedding", metric_type="COSINE", index_type="IVF_FLAT", params={"nlist": 128})
-    client.create_collection(collection_name=WATCHLIST_COLLECTION, schema=wl_schema)
-    client.create_index(collection_name=WATCHLIST_COLLECTION, index_params=wl_index)
+    client.create_collection(collection_name=WATCHLIST_COLLECTION, schema=wl_schema, index_params=wl_index)
+    client.load_collection(collection_name=WATCHLIST_COLLECTION)
     print(f"✅ Milvus collection '{WATCHLIST_COLLECTION}' ready.")
 
 print("\n🚀 Database Infrastructure Fully Initialized!")
