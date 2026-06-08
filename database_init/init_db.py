@@ -2,18 +2,22 @@ import psycopg2
 import json
 from pymilvus import MilvusClient, DataType
 
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend_api'))
+from config import settings
+
 # ==========================================
 # 1. INITIALIZE POSTGRESQL (Metadata & RBAC)
 # ==========================================
 print("⏳ Connecting to PostgreSQL...")
 try:
-    # Use your actual credentials here
     conn = psycopg2.connect(
-        dbname="surveillance",
-        user="admin",
-        password="password",
-        host="localhost",
-        port="5432"
+        dbname=settings.postgres_db,
+        user=settings.postgres_user,
+        password=settings.postgres_password,
+        host=settings.postgres_host,
+        port=settings.postgres_port
     )
     conn.autocommit = True
     cursor = conn.cursor()
@@ -125,7 +129,7 @@ except Exception as e:
 # 2. INITIALIZE MILVUS STANDALONE (Vectors)
 # ==========================================
 print("\n⏳ Connecting to Milvus Standalone...")
-client = MilvusClient(uri="http://localhost:19530")
+client = MilvusClient(uri=settings.milvus_uri)
 
 # --- Collection 1: face_embeddings (General Search) ---
 COLLECTION_NAME = "face_embeddings"
