@@ -10,6 +10,7 @@ import sys
 import psycopg2
 from pymilvus import MilvusClient
 from insightface.app import FaceAnalysis
+import re
 
 parser = argparse.ArgumentParser(description="AI Face Worker")
 parser.add_argument("--mode", type=str, default="live", choices=["live", "historic"])
@@ -150,7 +151,10 @@ while True:
             # DO NOT BREAK! Keep listening for other sessions.
             continue
             
-        cam_id    = payload['camera_id']
+        raw_cam_id = payload['camera_id']
+        # 🚨 MEDIUM FIX: Strip everything except alphanumeric characters and underscores
+        cam_id = re.sub(r'[^a-zA-Z0-9_]', '', str(raw_cam_id))
+        
         timestamp = payload['timestamp'] # In historic mode, this is the TRUE forensic timestamp!
 
         # 2. Decode full frame
@@ -337,13 +341,15 @@ while True:
             # ==========================================================
 
             # ── SAVE IMAGE TO DISK ──
-            person_folder = get_person_folder(str(person_id))
+            # Double check person_id sanitization just in case
+            safe_person_id = re.sub(r'[^a-zA-Z0-9_]', '', str(person_id))
+            person_folder = get_person_folder(safe_person_id)
             filename  = f"{cam_id}_{int(timestamp)}.jpg"
             filepath  = os.path.join(person_folder, filename)
             cv2.imwrite(filepath, face_crop)
             
             # Format path for React/FastAPI to serve (/images/...)
-            relative_path = f"/images/{person_id}/{filename}"
+            relative_path = f"/images/{safe_person_id}/{filename}"
 
             # ── SAVE TO DATABASE ──
             # Milvus: ONLY store the vector if this is a brand NEW person!
@@ -352,7 +358,7 @@ while True:
                 try:
                     milvus_client.insert(
                         collection_name=COLLECTION_NAME,
-                        data=[{"person_id": person_id, "embedding": embedding}]
+                        data=[{"person_id": safe_person_id, "embedding": embedding}]
                     )
                     # Safe to flush now because we only do it once per new person, not every frame!
                     milvus_client.flush(collection_name=COLLECTION_NAME)
@@ -360,11 +366,11 @@ while True:
                     print(f"⚠️ Milvus Insert Error: {e}")
 
             # PostgreSQL: ALWAYS store the physical sighting (for timelines/investigation)
-            db_path = f"/captured_faces/{person_id}/{filename}"
+            db_path = f"/captured_faces/{safe_person_id}/{filename}"
             pg_cursor.execute(
                 "INSERT INTO sightings (person_id, camera_id, timestamp, image_path) "
                 "VALUES (%s, %s, %s, %s)",
-                (person_id, cam_id, timestamp, db_path)
+                (safe_person_id, cam_id, timestamp, db_path)
             )
 
             # ────────────────────────────────────────────────────────

@@ -488,7 +488,8 @@ async def search_by_image(
 
     sightings = []
     conn = get_pg_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
 
     for match in search_res[0]:
         # Convert UI Similarity % (e.g. 0.75) to Milvus Max Allowed Distance (0.25)
@@ -515,8 +516,10 @@ async def search_by_image(
                     "image_url": formatted_image_url
                 })
 
-    cursor.close()
-    conn.close()
+    finally:
+        if 'cursor' in locals() and cursor: cursor.close()
+        if 'conn' in locals() and conn: conn.close()
+        
     sightings.sort(key=lambda x: x["timestamp"], reverse=True)
 
     return {
@@ -532,14 +535,16 @@ async def search_by_image(
 async def get_person_timeline(person_id: str):
     """Pulls Dossier and formats paths correctly for React UI Timeline."""
     conn = get_pg_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute(
-        "SELECT camera_id, timestamp, image_path FROM sightings WHERE person_id = %s ORDER BY timestamp ASC", 
-        (person_id,)
-    )
-    records = cursor.fetchall()
-    cursor.close()
-    conn.close()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            "SELECT camera_id, timestamp, image_path FROM sightings WHERE person_id = %s ORDER BY timestamp ASC", 
+            (person_id,)
+        )
+        records = cursor.fetchall()
+    finally:
+        if 'cursor' in locals() and cursor: cursor.close()
+        if 'conn' in locals() and conn: conn.close()
 
     if not records:
         raise HTTPException(status_code=404, detail="Person ID not found.")
@@ -583,16 +588,43 @@ class NVRSearchRequest(BaseModel):
 
 def run_nvr_historic_extraction(camera_id: str, start_time: int, end_time: int, session_id: str):
     script_path = os.path.join("..", "Ingestion", "producer_historic.py")
-    subprocess.run([
-        "python", script_path,
-        "--camera_id", camera_id,
-        "--start", str(start_time),
-        "--end", str(end_time),
-        "--session", session_id
-    ])
+    try:
+        subprocess.run([
+            "python", script_path,
+            "--camera_id", camera_id,
+            "--start", str(start_time),
+            "--end", str(end_time),
+            "--session", session_id
+        ], timeout=3600, check=True)
+    except subprocess.TimeoutExpired:
+        print(f"[FATAL] Session {session_id} timed out. Releasing thread.")
+        try:
+            conn = get_pg_connection()
+            cur = conn.cursor()
+            cur.execute("UPDATE historical_jobs SET status = 'FAILED_TIMEOUT' WHERE session_id = %s", (session_id,))
+            conn.commit()
+        except Exception: pass
+        finally:
+            if 'cur' in locals() and cur: cur.close()
+            if 'conn' in locals() and conn: conn.close()
+    except Exception as e:
+        print(f"[FATAL] Session {session_id} crashed: {e}")
+        try:
+            conn = get_pg_connection()
+            cur = conn.cursor()
+            cur.execute("UPDATE historical_jobs SET status = 'FAILED_CRASH' WHERE session_id = %s", (session_id,))
+            conn.commit()
+        except Exception: pass
+        finally:
+            if 'cur' in locals() and cur: cur.close()
+            if 'conn' in locals() and conn: conn.close()
 
 @app.post("/api/investigate/nvr_search")
-async def start_nvr_search(req: NVRSearchRequest, background_tasks: BackgroundTasks):
+async def start_nvr_search(
+    req: NVRSearchRequest, 
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(require_admin)
+):
     session_id = str(uuid.uuid4())
     conn = get_pg_connection()
     cursor = conn.cursor()
@@ -613,13 +645,16 @@ async def start_nvr_search(req: NVRSearchRequest, background_tasks: BackgroundTa
     return {"status": "success", "session_id": session_id}
 
 @app.get("/api/investigate/status/{session_id}")
-async def get_nvr_search_status(session_id: str):
+async def get_nvr_search_status(session_id: str, current_user: dict = Depends(get_current_user)):
     conn = get_pg_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT status FROM historical_jobs WHERE session_id = %s", (session_id,))
-    job = cursor.fetchone()
-    cursor.close()
-    conn.close()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("SELECT status FROM historical_jobs WHERE session_id = %s", (session_id,))
+        job = cursor.fetchone()
+    finally:
+        if 'cursor' in locals() and cursor: cursor.close()
+        if 'conn' in locals() and conn: conn.close()
+        
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return {"status": job['status']}
