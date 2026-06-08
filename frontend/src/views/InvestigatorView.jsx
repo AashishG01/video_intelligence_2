@@ -437,6 +437,34 @@ const InvestigatorView = () => {
                         Select an NVR camera and a time window. The AI will securely extract frames in the background without locking up the UI.
                     </p>
 
+                    <div className="mb-6">
+                        <label className="block text-sm font-semibold text-slate-700 mb-2">Optional: Target Suspect Photo</label>
+                        <div onClick={() => !previewUrl && fileInputRef.current?.click()} className={`relative border-2 border-dashed rounded-xl bg-slate-50 p-4 flex flex-col items-center justify-center text-center transition-all ${previewUrl ? 'border-blue-400 bg-blue-50/30' : 'border-slate-200 hover:bg-slate-100 cursor-pointer'}`}>
+                            {previewUrl ? (
+                                <div className="flex items-center gap-4 w-full">
+                                    <div className="relative w-16 h-16 bg-slate-900 rounded-lg overflow-hidden shrink-0">
+                                        <img src={previewUrl} alt="Cropped Output" className="w-full h-full object-cover" />
+                                        <button onClick={clearSelection} className="absolute top-0.5 right-0.5 bg-red-600 text-white rounded-full p-1 hover:bg-red-700 transition-colors z-10">
+                                            <X className="w-3 h-3" />
+                                        </button>
+                                    </div>
+                                    <div className="text-left flex-1">
+                                        <h4 className="font-bold text-sm text-slate-700">Suspect Loaded</h4>
+                                        <p className="text-xs text-slate-500">The AI will automatically search for this face once extraction finishes.</p>
+                                    </div>
+                                    <button onClick={(e) => { e.stopPropagation(); setIsEditorOpen(true); }} className="font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors text-xs">
+                                        Re-Crop
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="py-2">
+                                    <UploadCloud className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                                    <p className="text-sm font-medium text-slate-600">Click to upload & crop target face</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
                     <div className="space-y-4">
                         <div>
                             <label className="block text-sm font-semibold text-slate-700 mb-1">Select NVR Camera</label>
@@ -504,12 +532,21 @@ const InvestigatorView = () => {
                             </div>
                             <h4 className="font-bold text-lg">Extraction Complete!</h4>
                             <p className="text-sm mt-1 mb-3">The footage has been processed by the AI worker.</p>
-                            <button 
-                                onClick={() => { setNvrStatus(null); setNvrSessionId(null); setActiveTab('ID_SEARCH'); }}
-                                className="bg-emerald-600 text-white font-bold px-4 py-2 rounded shadow-sm hover:bg-emerald-700 transition-colors text-sm"
-                            >
-                                Jump to Dossier Search
-                            </button>
+                            {processedFile ? (
+                                <button 
+                                    onClick={() => { setNvrStatus(null); setNvrSessionId(null); setActiveTab('IMG_SEARCH'); setTimeout(handleSearch, 300); }}
+                                    className="bg-blue-600 text-white font-bold px-6 py-2.5 rounded-lg shadow-md hover:bg-blue-700 transition-colors text-sm flex items-center"
+                                >
+                                    <UserSearch className="w-4 h-4 mr-2" /> Auto-Search Suspect Now
+                                </button>
+                            ) : (
+                                <button 
+                                    onClick={() => { setNvrStatus(null); setNvrSessionId(null); setActiveTab('ID_SEARCH'); }}
+                                    className="bg-emerald-600 text-white font-bold px-6 py-2.5 rounded-lg shadow-md hover:bg-emerald-700 transition-colors text-sm"
+                                >
+                                    Jump to Dossier Search
+                                </button>
+                            )}
                         </div>
                     )}
                 </div>
