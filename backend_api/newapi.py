@@ -480,30 +480,30 @@ async def search_by_image(
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-    for match in search_res[0]:
-        # Convert UI Similarity % (e.g. 0.75) to Milvus Max Allowed Distance (0.25)
-        max_allowed_distance = 1.0 - threshold
-        if match['distance'] <= max_allowed_distance:
-            person_id = match['entity']['person_id']
-            cursor.execute("SELECT camera_id, timestamp, image_path FROM sightings WHERE person_id = %s", (person_id,))
-            pg_records = cursor.fetchall()
-            
-            for record in pg_records:
-                # FIX APPLIED HERE: Format URL string to preserve P_XXX folder structure
-                # DB gives us "/captured_faces/P_123/cam1.jpg"
-                # We turn it into "/images/P_123/cam1.jpg" so React can find it
-                formatted_image_url = record['image_path'].replace("/captured_faces/", "/images/")
+        for match in search_res[0]:
+            # Convert UI Similarity % (e.g. 0.75) to Milvus Max Allowed Distance (0.25)
+            max_allowed_distance = 1.0 - threshold
+            if match['distance'] <= max_allowed_distance:
+                person_id = match['entity']['person_id']
+                cursor.execute("SELECT camera_id, timestamp, image_path FROM sightings WHERE person_id = %s", (person_id,))
+                pg_records = cursor.fetchall()
                 
-                # Format timestamp
-                readable_time = datetime.fromtimestamp(record['timestamp']).strftime("%Y-%m-%d %H:%M:%S")
-                
-                sightings.append({
-                    "person_id": person_id,
-                    "camera": record["camera_id"],
-                    "timestamp": readable_time,
-                    "match_score": round(match['distance'], 4),
-                    "image_url": formatted_image_url
-                })
+                for record in pg_records:
+                    # FIX APPLIED HERE: Format URL string to preserve P_XXX folder structure
+                    # DB gives us "/captured_faces/P_123/cam1.jpg"
+                    # We turn it into "/images/P_123/cam1.jpg" so React can find it
+                    formatted_image_url = record['image_path'].replace("/captured_faces/", "/images/")
+                    
+                    # Format timestamp
+                    readable_time = datetime.fromtimestamp(record['timestamp']).strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    sightings.append({
+                        "person_id": person_id,
+                        "camera": record["camera_id"],
+                        "timestamp": readable_time,
+                        "match_score": round(match['distance'], 4),
+                        "image_url": formatted_image_url
+                    })
 
     finally:
         if 'cursor' in locals() and cursor: cursor.close()
