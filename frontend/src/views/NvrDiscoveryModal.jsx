@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, Loader2, X, CheckSquare, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { Search, Loader2, X, CheckSquare, AlertTriangle, ShieldCheck, RefreshCw } from 'lucide-react';
 import api from '../api';
 
 const NvrDiscoveryModal = ({ isOpen, onClose, onImportSuccess }) => {
@@ -35,19 +35,22 @@ const NvrDiscoveryModal = ({ isOpen, onClose, onImportSuccess }) => {
 
     const handleImport = async () => {
         setStep(4);
+        setImportResult(null);
         const camerasToImport = discoveredCameras.filter(c => selectedCameras.has(c.camera_id));
         try {
             const res = await api.post('/api/nvr/bulk_import', camerasToImport);
             setImportResult(res.data);
-            setTimeout(() => {
-                onImportSuccess();
-                onClose();
-            }, 3000);
+            onImportSuccess();
         } catch (error) {
             console.error(error);
             alert("Bulk Import Failed: " + (error.response?.data?.detail || error.message));
             setStep(3);
         }
+    };
+
+    const handleRetry = () => {
+        setImportResult(null);
+        setStep(3);
     };
 
     return (
@@ -150,12 +153,18 @@ const NvrDiscoveryModal = ({ isOpen, onClose, onImportSuccess }) => {
                                         <p className="text-2xl font-black text-teal-600">{importResult.imported}</p>
                                     </div>
                                     <p className="text-slate-500 text-sm mt-4">Dead ghost streams were actively rejected.</p>
+                                    <button 
+                                        onClick={handleRetry}
+                                        className="mt-5 flex items-center gap-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-indigo-600/20 transition-all"
+                                    >
+                                        <RefreshCw className="w-4 h-4" /> Retry Verification
+                                    </button>
                                 </>
                             ) : (
                                 <>
                                     <Loader2 className="w-12 h-12 text-teal-500 animate-spin mb-4" />
                                     <h3 className="text-lg font-bold text-slate-700">Pinging OpenCV Streams...</h3>
-                                    <p className="text-slate-500 text-sm text-center max-w-sm mt-2">Executing concurrent asyncio.gather validation to filter out ghost channels. (Timeout: 2.5s)</p>
+                                    <p className="text-slate-500 text-sm text-center max-w-sm mt-2">Executing concurrent asyncio.gather validation to filter out ghost channels. (Timeout: 8s)</p>
                                 </>
                             )}
                         </div>
