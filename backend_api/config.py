@@ -14,6 +14,14 @@ class Settings(BaseSettings):
     milvus_uri: str = "http://localhost:19530"
 
     jwt_secret_key: str = ""
+    
+    # Notifications
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_phone_number: str = ""
+    
+    smtp_sender_email: str = ""
+    smtp_app_password: str = ""
 
     # Look for .env file in the parent directory
     model_config = SettingsConfigDict(

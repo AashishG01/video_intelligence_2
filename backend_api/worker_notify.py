@@ -1,50 +1,57 @@
 import os
-import redis
 import json
 import smtplib
+import asyncio
+import re
+import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import time
+
+from loguru import logger
+import redis.asyncio as redis_async
+import redis as redis_sync
+from twilio.rest import Client
+
+from config import settings
+
+logger.add("logs/worker_notify.log", rotation="10 MB")
 
 # ─────────────────────────────────────────
-# CONFIGURATION — Loaded from environment variables
-# ─────────────────────────────────────────
-# Set these before starting the process:
-#   Linux/macOS : export SMTP_SENDER_EMAIL="you@gmail.com"
-#                 export SMTP_APP_PASSWORD="xxxx xxxx xxxx xxxx"
-#   Windows CMD : set SMTP_SENDER_EMAIL=you@gmail.com
-#                 set SMTP_APP_PASSWORD=xxxx xxxx xxxx xxxx
-#   .env file   : Use python-dotenv and add both keys to .env (add .env to .gitignore)
+# CONFIGURATION — Loaded from config.py
 # ─────────────────────────────────────────
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SENDER_EMAIL    = os.environ.get("SMTP_SENDER_EMAIL")
-SENDER_PASSWORD = os.environ.get("SMTP_APP_PASSWORD")
+SENDER_EMAIL = settings.smtp_sender_email
+SENDER_PASSWORD = settings.smtp_app_password
 
-# ── Fail fast: refuse to start if credentials are missing ──
+# Initialize Sync Redis for Cooldowns (simpler for setex)
+r_sync = redis_sync.Redis(host=settings.redis_host, port=settings.redis_port, db=0, decode_responses=True)
+
+# Initialize Twilio Client
+twilio_client = None
+if settings.twilio_account_sid and settings.twilio_auth_token:
+    try:
+        twilio_client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
+        logger.info("📱 Twilio Client Initialized.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Twilio client: {e}")
+else:
+    logger.warning("Twilio credentials not found. SMS notifications are disabled.")
+
+# ── Fail fast: refuse to start if SMTP credentials are missing ──
 if not SENDER_EMAIL or not SENDER_PASSWORD:
-    raise EnvironmentError(
-        "\n❌  SMTP credentials not set!\n"
-        "    Please set the following environment variables before starting:\n"
-        "      SMTP_SENDER_EMAIL  — your Gmail address\n"
-        "      SMTP_APP_PASSWORD  — your 16-character Gmail App Password\n"
-        "    See notes.md § BUG-003 for full setup instructions."
-    )
+    logger.warning("SMTP credentials not set in .env! Email notifications are disabled.")
 
-EMAIL_COOLDOWN_SEC = 300  # Don't re-send email for the same person within 5 minutes
+EMAIL_COOLDOWN_SEC = 300  # 5 minutes
+SMS_COOLDOWN_SEC = 300    # 5 minutes
 
 # ─────────────────────────────────────────
-# 1. Connections
-# ─────────────────────────────────────────
-# ─────────────────────────────────────────
-# 1. Connections & Setup
-# ─────────────────────────────────────────
-print("⏳ Initializing Notification Microservice...")
-
-# ─────────────────────────────────────────
-# 2. Email Sending Engine (Tactical HTML)
+# 1. Email Sending Engine (Synchronous in background thread)
 # ─────────────────────────────────────────
 def send_threat_email(alert_data, recipient_emails):
+    if not SENDER_EMAIL or not SENDER_PASSWORD:
+        return
+        
     suspect_name = alert_data.get('full_name', 'Unknown Target')
     risk_level = alert_data.get('risk_level', 'UNKNOWN')
     confidence = float(alert_data.get('confidence', 0)) * 100
@@ -53,27 +60,21 @@ def send_threat_email(alert_data, recipient_emails):
 
     subject = f"🚨 C.O.R.E. ALERT: Level {risk_level} Threat Detected - {suspect_name}"
 
-    # Sleek, dark-mode tactical email template
     html_body = f"""
     <html>
         <body style="font-family: Arial, sans-serif; background-color: #020617; color: #f8fafc; padding: 20px;">
             <div style="max-width: 600px; margin: auto; border: 2px solid #ef4444; border-radius: 12px; background-color: #0f172a; overflow: hidden;">
-                
                 <div style="background-color: #ef4444; padding: 15px; text-align: center;">
                     <h2 style="color: #ffffff; margin: 0; font-size: 24px; letter-spacing: 2px; text-transform: uppercase;">Critical Watchlist Match</h2>
                     <p style="color: #fca5a5; margin: 5px 0 0 0; font-size: 12px; letter-spacing: 1px;">PROTOCOL OVERRIDE: IMMEDIATE ACTION REQUIRED</p>
                 </div>
-                
                 <div style="padding: 25px;">
                     <h3 style="color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">Identified Target</h3>
                     <p style="font-size: 32px; font-weight: bold; margin: 0 0 15px 0; color: #ffffff;">{suspect_name}</p>
-                    
                     <span style="background-color: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #ef4444; padding: 4px 10px; border-radius: 4px; font-weight: bold; font-size: 12px; text-transform: uppercase;">
                         Risk Level: {risk_level}
                     </span>
-
                     <hr style="border: 0; border-top: 1px solid #1e293b; margin: 25px 0;">
-
                     <table style="width: 100%; border-collapse: collapse;">
                         <tr>
                             <td style="padding: 10px 0;">
@@ -92,10 +93,6 @@ def send_threat_email(alert_data, recipient_emails):
                             </td>
                         </tr>
                     </table>
-                </div>
-
-                <div style="background-color: #020617; padding: 15px; text-align: center; border-top: 1px solid #1e293b;">
-                    <p style="font-size: 11px; color: #64748b; margin: 0;">This is an automated dispatch from the C.O.R.E. Surveillance Network. Do not reply.</p>
                 </div>
             </div>
         </body>
@@ -116,68 +113,104 @@ def send_threat_email(alert_data, recipient_emails):
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         server.sendmail(SENDER_EMAIL, recipient_emails, msg.as_string())
         server.quit()
-        print(f"✅ Threat intel dispatched to: {recipient_emails}")
+        logger.info(f"✅ Threat intel (Email) dispatched to: {recipient_emails}")
     except Exception as e:
-        print(f"❌ SMTP Escalation Failed: {e}")
+        logger.error(f"❌ SMTP Escalation Failed: {e}")
 
 # ─────────────────────────────────────────
-# 3. Main Listening Loop
+# 2. SMS Sending Engine (Asynchronous)
 # ─────────────────────────────────────────
-# ─────────────────────────────────────────
-# 3. Main Listening Loop (Auto-Recovering)
-# ─────────────────────────────────────────
-print("📧 Notification Microservice Online. Awaiting Threat Intel...")
+async def send_threat_sms(alert_data: dict, phone_numbers: list):
+    if not twilio_client or not settings.twilio_phone_number:
+        return
 
-while True:
+    suspect_name = alert_data.get('full_name', 'Unknown Target')
+    risk_level = alert_data.get('risk_level', 'UNKNOWN')
+    cam_id = alert_data.get('camera_id', 'Unknown Camera')
+    timestamp_readable = time.strftime('%H:%M:%S', time.localtime(alert_data.get('timestamp', time.time())))
+
+    # Strict 160-char formatting to prevent double billing
+    message_body = f"[CORE] {risk_level} ALERT: {suspect_name} on {cam_id} at {timestamp_readable}"
+    message_body = message_body[:160] 
+
+    for number in phone_numbers:
+        # E.164 Normalization (Default +91 for India)
+        clean_num = re.sub(r'\D', '', number)
+        if len(clean_num) == 10:
+            clean_num = f"+91{clean_num}"
+        elif len(clean_num) > 10 and not clean_num.startswith('+'):
+            clean_num = f"+{clean_num}"
+            
+        try:
+            # Async Execution to protect the worker thread
+            await twilio_client.messages.create_async(
+                body=message_body,
+                from_=settings.twilio_phone_number,
+                to=clean_num
+            )
+            logger.info(f"✅ Threat intel (SMS) dispatched to: {clean_num}")
+        except Exception as e:
+            logger.error(f"❌ Failed to send SMS to {clean_num}: {e}")
+
+# ─────────────────────────────────────────
+# 3. Main Listening Loop (Asyncio)
+# ─────────────────────────────────────────
+async def notification_loop():
+    logger.info("📧 Notification Microservice Online. Awaiting Threat Intel...")
+    
+    # We use redis.asyncio to prevent the pubsub loop from blocking
+    r_async = redis_async.Redis(host=settings.redis_host, port=settings.redis_port, db=0, decode_responses=True)
+    pubsub = r_async.pubsub()
+    await pubsub.subscribe('live_face_alerts')
+
     try:
-        r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
-        pubsub = r.pubsub()
-        pubsub.subscribe('live_face_alerts')
-        
-        for message in pubsub.listen():
+        async for message in pubsub.listen():
             if message['type'] == 'message':
                 try:
                     alert = json.loads(message['data'])
 
-                    # RULE 1: We only escalate if it's a Watchlist Match. We don't spam for unknown people.
+                    # RULE 1: Only escalate Watchlist Matches
                     if alert.get('status') == 'WATCHLIST_MATCH':
-                        # Check if system is armed before sending emails
                         if not alert.get('is_armed', True):
-                            print(f"🔕 System is DISARMED. Skipping email for {alert.get('full_name', 'Unknown')}.")
+                            logger.info(f"🔕 System is DISARMED. Skipping alerts for {alert.get('full_name', 'Unknown')}.")
                             continue
 
                         person_id = alert.get('person_id')
-
-                        # RULE 2: Anti-Spam Check (Specific to Emails)
+                        
+                        # --- EMAIL PROCESSING ---
                         email_lock_key = f"email_sent_{person_id}"
-                        if r.exists(email_lock_key):
-                            print(f"🔕 Email for {person_id} is on cooldown. Skipping.")
-                            continue
-
-                        # RULE 3: Fetch the dynamically assigned emails from Redis
-                        raw_emails = r.get("GLOBAL_NOTIFY_EMAILS")
-                        if raw_emails:
-                            target_emails = json.loads(raw_emails)
-                            if len(target_emails) > 0:
-                                print(f"🚨 ALERT TRIGGERED! Escalating to {len(target_emails)} operators...")
-                                
-                                # Fire the email
-                                send_threat_email(alert, target_emails)
-                                
-                                # Lock the email system for this specific person for 5 minutes
-                                r.setex(email_lock_key, EMAIL_COOLDOWN_SEC, "1")
-                            else:
-                                print("⚠️ Threat detected, but NO EMAILS configured in C.O.R.E UI.")
-                        else:
-                            print("⚠️ Threat detected, but GLOBAL_NOTIFY_EMAILS key is missing in Redis.")
+                        if not r_sync.exists(email_lock_key):
+                            raw_emails = r_sync.get("GLOBAL_NOTIFY_EMAILS")
+                            if raw_emails:
+                                target_emails = json.loads(raw_emails)
+                                if len(target_emails) > 0:
+                                    logger.info(f"🚨 Escalating (Email) to {len(target_emails)} operators...")
+                                    # Execute synchronous SMTP blocking in a separate background thread
+                                    asyncio.create_task(asyncio.to_thread(send_threat_email, alert, target_emails))
+                                    r_sync.setex(email_lock_key, EMAIL_COOLDOWN_SEC, "1")
+                                    
+                        # --- SMS PROCESSING ---
+                        sms_lock_key = f"sms_sent_{person_id}"
+                        if not r_sync.exists(sms_lock_key):
+                            raw_phones = r_sync.get("GLOBAL_NOTIFY_PHONES")
+                            if raw_phones:
+                                target_phones = json.loads(raw_phones)
+                                if len(target_phones) > 0:
+                                    logger.info(f"🚨 Escalating (SMS) to {len(target_phones)} devices...")
+                                    # Execute Twilio async
+                                    asyncio.create_task(send_threat_sms(alert, target_phones))
+                                    r_sync.setex(sms_lock_key, SMS_COOLDOWN_SEC, "1")
 
                 except Exception as e:
-                    print(f"⚠️ Notification Message Parsing Error: {e}")
+                    logger.error(f"⚠️ Notification Message Parsing Error: {e}")
                     
-    except KeyboardInterrupt:
-        print("\n🛑 Notification Microservice stopped by user.")
-        break
+    except asyncio.CancelledError:
+        logger.info("\n🛑 Notification Microservice stopped.")
     except Exception as e:
-        print(f"⚠️ Redis Connection Lost in Notification Worker: {e}")
-        print("🔄 Attempting to reconnect in 5 seconds...")
-        time.sleep(5)
+        logger.exception(f"⚠️ Redis Connection Lost in Async Loop: {e}")
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(notification_loop())
+    except KeyboardInterrupt:
+        logger.info("\n🛑 Notification Microservice stopped by user.")
