@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Video, Trash2, Edit, Plus, MapPin, Activity, Tag, Link as LinkIcon, Loader2, Globe } from 'lucide-react';
+import { Video, Trash2, Edit, Plus, MapPin, Activity, Tag, Link as LinkIcon, Loader2, Globe, Search } from 'lucide-react';
 import api from '../api';
+import NvrDiscoveryModal from './NvrDiscoveryModal';
 
 const CameraSettingsView = () => {
     const [cameras, setCameras] = useState([]);
     const [loading, setLoading] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isEditing, setIsEditing] = useState(false);
+    const [isDiscoveryOpen, setIsDiscoveryOpen] = useState(false);
 
     // Form State
     const [formData, setFormData] = useState({
@@ -132,6 +134,14 @@ const CameraSettingsView = () => {
                     <p className="text-slate-500 mt-2 text-lg">
                         Dynamically enroll or remove camera feeds from the surveillance network.
                     </p>
+                </div>
+                <div className="flex space-x-3">
+                    <button 
+                        onClick={() => setIsDiscoveryOpen(true)}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-3 rounded-xl font-bold flex items-center shadow-lg shadow-indigo-600/20 transition-all"
+                    >
+                        <Search className="w-5 h-5 mr-2" /> Auto-Discover NVR
+                    </button>
                 </div>
             </div>
 
@@ -392,6 +402,13 @@ const CameraSettingsView = () => {
                     )}
                 </div>
             </div>
+
+            {/* Render the ONVIF Auto-Discovery Modal */}
+            <NvrDiscoveryModal 
+                isOpen={isDiscoveryOpen} 
+                onClose={() => setIsDiscoveryOpen(false)} 
+                onImportSuccess={fetchCameras} 
+            />
         </div>
     );
 };

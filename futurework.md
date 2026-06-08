@@ -15,8 +15,6 @@ This document serves as the unified checklist for the system's development, comb
 - [ ] **Camera Telemetry:** Allow users to interact with camera markers on the map to view specific telemetry and details.
 
 ### 3. NVR & Hardware Integration
-- [ ] **NVR Integration:** Implement NVR (Network Video Recorder) integration for centralized camera stream management and targeted recording searches.
-- [ ] **Automated Discovery:** Support automated camera discovery and stream configuration through connected NVRs.
 - [ ] **System Monitoring:** Build a dashboard widget to monitor the host machine's average GPU and CPU utilization.
 
 ### 4. Watchlist Improvements
@@ -47,7 +45,9 @@ This document serves as the unified checklist for the system's development, comb
 - [x] **Ghost-Match Prevention:** Updated AI Workers to use strict database JOINs to ensure suspects belong to active watchlists before triggering alerts.
 - [x] **Color Coding:** Added visual color coding to Watchlist categories.
 
-### Camera Management
+### Camera & NVR Management
+- [x] **Automated NVR Discovery:** Deployed an asynchronous ONVIF auto-scanner with a 4-state UI and concurrent ghost-channel validation.
+- [x] **NVR Time Machine Integration:** Implemented targeted historical recording extraction via ISAPI/RTSP and `producer_historic.py` for Uniview NVRs.
 - [x] **Editable Configs:** Enabled real-time editing of camera properties (including Latitude/Longitude fields).
 - [x] **Active Health Checks:** Built live stream validation that automatically flags dead streams as "Offline".
 - [x] **Interactive Layouts:** Implemented Drag-and-Drop (DND) functionality for the camera grid.

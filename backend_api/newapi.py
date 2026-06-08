@@ -1331,6 +1331,90 @@ async def upload_custom_audio(file: UploadFile = File(...)):
         return {"error": "Failed to upload audio"}
 
 # ==========================================
+# NVR AUTOMATED DISCOVERY (ONVIF)
+# ==========================================
+class NvrDiscoverRequest(BaseModel):
+    ip: str
+    port: int = 80
+    user: str
+    password: str
+
+@app.post("/api/nvr/discover")
+async def discover_nvr_cameras(req: NvrDiscoverRequest):
+    try:
+        from nvr_discovery import async_scan_nvr
+        cameras = await async_scan_nvr(req.ip, req.port, req.user, req.password)
+        return {"status": "success", "cameras": cameras}
+    except Exception as e:
+        logger.error(f"❌ Discovery error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def _ping_rtsp_sync(rtsp_url: str) -> bool:
+    """Synchronous OpenCV ping, isolated from the main thread."""
+    cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 2000) 
+    
+    if not cap.isOpened():
+        return False
+        
+    ret, frame = cap.read()
+    cap.release()
+    return ret
+
+async def validate_camera_stream(camera: dict) -> dict:
+    """Wraps the sync ping in a strict 2.5-second async timeout."""
+    try:
+        # Give the stream exactly 2.5 seconds to return a frame, or kill it
+        is_alive = await asyncio.wait_for(
+            asyncio.to_thread(_ping_rtsp_sync, camera['rtsp_url']), 
+            timeout=2.5
+        )
+        camera['is_alive'] = is_alive
+    except (asyncio.TimeoutError, Exception):
+        camera['is_alive'] = False
+    return camera
+
+@app.post("/api/nvr/bulk_import")
+async def bulk_import_cameras(selected_cameras: list[dict]):
+    # Fire all validation pings concurrently. 16 cameras take the same time as 1 camera.
+    validation_tasks = [validate_camera_stream(cam) for cam in selected_cameras]
+    validated_results = await asyncio.gather(*validation_tasks)
+    
+    # Filter out the ghosts
+    alive_cameras = [cam for cam in validated_results if cam['is_alive']]
+    
+    if not alive_cameras:
+        return {"attempted": len(selected_cameras), "imported": 0, "message": "All selected cameras failed validation (Ghosts)."}
+
+    conn = get_pg_connection()
+    cursor = conn.cursor()
+    try:
+        for cam in alive_cameras:
+            # Default to 15 fps and "Auto-Discovered" location
+            cursor.execute("""
+                INSERT INTO cameras (camera_id, name, location, rtsp_url, fps_limit)
+                VALUES (%s, %s, %s, %s, 15)
+                ON CONFLICT (camera_id) DO UPDATE SET rtsp_url = EXCLUDED.rtsp_url
+            """, (cam['camera_id'], cam['name'], "Auto-Discovered", cam['rtsp_url']))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"❌ Bulk import DB error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cursor.close()
+        conn.close()
+
+    # Trigger MediaMTX routing for alive cameras dynamically
+    for cam in alive_cameras:
+        sync_camera_to_mediamtx(cam['camera_id'], cam['rtsp_url'])
+        
+    return {
+        "attempted": len(selected_cameras),
+        "imported": len(alive_cameras),
+        "message": f"Successfully imported {len(alive_cameras)} alive streams."
+    }
+
+# ==========================================
 # RUN
 # uvicorn newapi:app --host 0.0.0.0 --port 8000 --reload
 # ==========================================

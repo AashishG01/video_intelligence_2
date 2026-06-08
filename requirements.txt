@@ -13,3 +13,4 @@ python-multipart
 loguru
 twilio
 python-dotenv
+onvif-zeep
