@@ -1350,24 +1350,37 @@ async def discover_nvr_cameras(req: NvrDiscoverRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 def _ping_rtsp_sync(rtsp_url: str) -> bool:
-    """Synchronous OpenCV ping, isolated from the main thread."""
+    """Synchronous OpenCV ping, isolated from the main thread.
+    H.265 streams require waiting for the next IDR keyframe before
+    the decoder can produce a valid frame. We retry up to 30 reads
+    and force TCP transport for reliability.
+    """
+    # Force TCP transport — UDP drops packets on congested LANs
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
     cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 2000) 
+    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000) 
     
     if not cap.isOpened():
         return False
-        
-    ret, frame = cap.read()
+    
+    # H.265 needs multiple reads to land on a keyframe
+    for _ in range(30):
+        ret, frame = cap.read()
+        if ret:
+            cap.release()
+            return True
+    
     cap.release()
-    return ret
+    return False
 
 async def validate_camera_stream(camera: dict) -> dict:
-    """Wraps the sync ping in a strict 2.5-second async timeout."""
+    """Wraps the sync ping in an 8-second async timeout.
+    H.265 streams need ~3-4s for TCP handshake + first keyframe.
+    """
     try:
-        # Give the stream exactly 2.5 seconds to return a frame, or kill it
         is_alive = await asyncio.wait_for(
             asyncio.to_thread(_ping_rtsp_sync, camera['rtsp_url']), 
-            timeout=2.5
+            timeout=8.0
         )
         camera['is_alive'] = is_alive
     except (asyncio.TimeoutError, Exception):
