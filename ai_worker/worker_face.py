@@ -11,6 +11,13 @@ import psycopg2
 from pymilvus import MilvusClient
 from insightface.app import FaceAnalysis
 import re
+from loguru import logger
+
+logger.add("logs/worker_face.log", rotation="10 MB")
+
+# Import centralized configuration
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend_api'))
+from config import settings
 
 parser = argparse.ArgumentParser(description="AI Face Worker")
 parser.add_argument("--mode", type=str, default="live", choices=["live", "historic"])
@@ -32,23 +39,23 @@ DEDUP_WINDOW_SEC  = 60     # Global dedup window per person (seconds) to prevent
 # 1. Connections
 # ─────────────────────────────────────────
 print("⏳ Connecting to Redis...")
-r = redis.Redis(host='localhost', port=6379, db=0)
+r = redis.Redis(host=settings.redis_host, port=settings.redis_port, db=0)
 # Dedicated publisher connection to prevent blocking
-r_pub = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+r_pub = redis.Redis(host=settings.redis_host, port=settings.redis_port, db=0, decode_responses=True)
 
 print("⏳ Connecting to PostgreSQL...")
 pg_conn = psycopg2.connect(
-    dbname="surveillance",
-    user="admin",        # Update with your actual DB credentials
-    password="password", # Update with your actual DB credentials
-    host="localhost",
-    port="5432"
+    dbname=settings.postgres_db,
+    user=settings.postgres_user,
+    password=settings.postgres_password,
+    host=settings.postgres_host,
+    port=settings.postgres_port
 )
 pg_conn.autocommit = True
 pg_cursor = pg_conn.cursor()
 
 print("⏳ Connecting to Milvus Standalone...")
-milvus_client = MilvusClient(uri="http://localhost:19530")
+milvus_client = MilvusClient(uri=settings.milvus_uri)
 COLLECTION_NAME = "face_embeddings"
 WATCHLIST_COLLECTION = "watchlist_faces"
 
@@ -138,12 +145,12 @@ while True:
         # --- EOF POISON PILL CHECK ---
         if payload.get("status") == "EOF":
             session_id = payload.get("session_id")
-            print(f"\n💊 [Session {session_id}] EOF Poison Pill. Extraction COMPLETE.")
+            logger.info(f"💊 [Session {session_id}] EOF Poison Pill. Extraction COMPLETE.")
             # Update DB State Machine
             try:
                 pg_cursor.execute("UPDATE historical_jobs SET status = 'COMPLETED' WHERE session_id = %s", (session_id,))
             except Exception as e:
-                print(f"⚠️ Failed to update DB status for session {session_id}: {e}")
+                logger.error(f"⚠️ Failed to update DB status for session {session_id}: {e}")
             
             # Clean up Redis Queue just in case
             r.delete(queue_name)
@@ -443,12 +450,12 @@ while True:
                     print(f"[{cam_id}] {status_log}: {person_id} → {person_folder}")
 
     except KeyboardInterrupt:
-        print("\n🛑 Worker stopped by user.")
+        logger.info("\n🛑 Worker stopped by user.")
         break
 
     except Exception as e:
         error_msg = str(e)
-        print(f"⚠️ Worker Error: {error_msg}")
+        logger.exception(f"Worker Error: {error_msg}")
 
         # Auto-recover
         if "collection not loaded" in error_msg:
@@ -462,7 +469,11 @@ while True:
             print("🔄 PostgreSQL connection lost. Reconnecting...")
             try:
                 pg_conn = psycopg2.connect(
-                    dbname="surveillance", user="admin", password="password", host="localhost", port="5432"
+                    dbname=settings.postgres_db, 
+                    user=settings.postgres_user, 
+                    password=settings.postgres_password, 
+                    host=settings.postgres_host, 
+                    port=settings.postgres_port
                 )
                 pg_conn.autocommit = True
                 pg_cursor = pg_conn.cursor()
@@ -475,4 +486,4 @@ print("🧹 Cleaning up connections...")
 pg_cursor.close()
 pg_conn.close()
 r_pub.close()
-print("✅ Shutdown complete.")
+logger.info("✅ Shutdown complete.")

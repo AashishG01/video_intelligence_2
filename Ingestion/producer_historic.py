@@ -8,22 +8,30 @@ import argparse
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import urllib.parse
+import sys
+from loguru import logger
+
+logger.add("logs/producer_historic.log", rotation="10 MB")
+
+# Import centralized configuration
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend_api'))
+from config import settings
 
 # Force TCP for RTSP to prevent UDP packet loss
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 # Connect to local Redis
-r = redis.Redis(host='localhost', port=6379, db=0)
+r = redis.Redis(host=settings.redis_host, port=settings.redis_port, db=0)
 
 def get_nvr_config(camera_id):
     """Fetch NVR parameters for a camera from the PostgreSQL database."""
     try:
         conn = psycopg2.connect(
-            dbname="surveillance",
-            user="admin",
-            password="password",
-            host="localhost",
-            port="5432"
+            dbname=settings.postgres_db,
+            user=settings.postgres_user,
+            password=settings.postgres_password,
+            host=settings.postgres_host,
+            port=settings.postgres_port
         )
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("SELECT nvr_brand, nvr_ip, nvr_user, nvr_pass, nvr_channel FROM cameras WHERE camera_id = %s", (camera_id,))
@@ -32,7 +40,7 @@ def get_nvr_config(camera_id):
         conn.close()
         return cam
     except Exception as e:
-        print(f"⚠️ Failed to fetch NVR config from DB: {e}")
+        logger.error(f"Failed to fetch NVR config from DB for camera {camera_id}: {e}")
         return None
 
 def main():
@@ -42,14 +50,15 @@ def main():
     parser.add_argument("--end", type=int, required=True, help="End Unix Timestamp")
     parser.add_argument("--session", type=str, required=True, help="Unique Session ID for queue isolation")
     args = parser.parse_args()
+    
+    # Bind context to all logs in this session
+    log = logger.bind(session_id=args.session, camera_id=args.camera_id)
 
-    print(f"🕰️ TIME MACHINE INITIALIZED for {args.camera_id}")
-    print(f"   Session ID: {args.session}")
-    print(f"   Time Window: {args.start} -> {args.end}")
+    log.info(f"TIME MACHINE INITIALIZED. Time Window: {args.start} -> {args.end}")
 
     cam = get_nvr_config(args.camera_id)
     if not cam or cam.get('nvr_brand') != 'uniview':
-        print(f"❌ Error: Camera '{args.camera_id}' is not configured as a Uniview NVR.")
+        log.error("Camera is not configured as a Uniview NVR.")
         return
 
     # 1. Build Replay URL
@@ -58,20 +67,20 @@ def main():
     
     queue_name = f"historic_frames_queue:{args.session}"
     
-    print(f"⏳ Connecting to NVR stream...")
+    log.info("Connecting to NVR stream...")
     cap = None
     try:
         cap = cv2.VideoCapture(replay_url, cv2.CAP_FFMPEG)
         
         if not cap.isOpened():
-            print(f"❌ Failed to connect to NVR replay stream.")
+            log.error("Failed to connect to NVR replay stream.")
             return
 
         original_fps = cap.get(cv2.CAP_PROP_FPS)
         if not original_fps or original_fps <= 0:
             original_fps = 25.0 # Fallback to Uniview default
             
-        print(f"✅ Stream Connected! Original FPS: {original_fps}")
+        log.info(f"Stream Connected! Original FPS: {original_fps}")
 
         # Aggressive Frame Skipping (Targeting ~3 FPS for AI)
         # If original is 25 fps, we skip ~8 frames for every 1 processed.
@@ -84,12 +93,12 @@ def main():
         while True:
             # --- Redis OOM Protection (Backpressure) ---
             while r.llen(queue_name) > 500:
-                print(f"⚠️ [BACKPRESSURE] Queue full (500). Pausing extraction to let AI catch up...", end='\r')
+                log.warning("Queue full (500). Pausing extraction to let AI catch up...")
                 time.sleep(1.0)
 
             ret, frame = cap.read()
             if not ret:
-                print("\n🛑 End of File (EOF) reached.")
+                log.info("End of File (EOF) reached.")
                 break
 
             frame_count += 1
@@ -120,10 +129,10 @@ def main():
             processed_count += 1
             
             if processed_count % 10 == 0:
-                print(f"🚀 Extracted & Pushed {processed_count} frames to {queue_name}...", end='\r')
+                pass # Removed noisy print
 
     except Exception as e:
-        print(f"\n❌ Extraction aborted due to error: {e}")
+        log.exception(f"Extraction aborted due to error: {e}")
     finally:
         # 🚨 HIGH FIX 1: Guaranteed Hardware Socket Release
         if cap is not None:
@@ -131,11 +140,11 @@ def main():
             
         # 🚨 HIGH FIX 2: Guaranteed State Machine Resolution (The Orphan Fix)
         # Even if the script crashes, it sends the EOF pill so the AI worker knows to close the DB row.
-        print("\n💊 Injecting EOF Poison Pill into queue...")
+        log.info("Injecting EOF Poison Pill into queue...")
         eof_payload = {"status": "EOF", "camera_id": args.camera_id, "session_id": args.session}
         r.lpush(queue_name, json.dumps(eof_payload))
         
-        print("✅ Time Machine Extraction Complete and Safely Shut Down.")
+        log.info("Time Machine Extraction Complete and Safely Shut Down.")
 
 if __name__ == "__main__":
     main()

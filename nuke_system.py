@@ -6,13 +6,16 @@ import redis
 import psycopg2
 from pymilvus import MilvusClient
 
+import sys
+from backend_api.config import settings
+
 print("⚠️  INITIATING C.O.R.E. SYSTEM FACTORY RESET ⚠️\n")
 
 # ==========================================
 # 1. NUKE REDIS (Queues & Locks)
 # ==========================================
 try:
-    r = redis.Redis(host='localhost', port=6379, db=0)
+    r = redis.Redis(host=settings.redis_host, port=settings.redis_port, db=0)
     r.flushdb()
     print("✅ REDIS: Wiped all queues, locks, and cache.")
 except Exception as e:
@@ -22,7 +25,7 @@ except Exception as e:
 # 2. NUKE MILVUS (Vector Embeddings)
 # ==========================================
 try:
-    milvus = MilvusClient(uri="http://localhost:19530")
+    milvus = MilvusClient(uri=settings.milvus_uri)
     for collection in ["face_embeddings", "watchlist_faces"]:
         if milvus.has_collection(collection):
             milvus.drop_collection(collection)
@@ -34,7 +37,13 @@ except Exception as e:
 # 3. NUKE POSTGRESQL (Operational Data)
 # ==========================================
 try:
-    conn = psycopg2.connect(dbname="surveillance", user="admin", password="password", host="localhost", port="5432")
+    conn = psycopg2.connect(
+        dbname=settings.postgres_db, 
+        user=settings.postgres_user, 
+        password=settings.postgres_password, 
+        host=settings.postgres_host, 
+        port=settings.postgres_port
+    )
     conn.autocommit = True
     cursor = conn.cursor()
     

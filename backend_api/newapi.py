@@ -26,6 +26,13 @@ from datetime import datetime
 from typing import List, Optional
 from auth import verify_password, get_password_hash, create_access_token, get_current_user, require_admin
 from contextlib import asynccontextmanager
+from loguru import logger
+from config import settings
+from database import db_pool, get_db_connection
+from repositories.sighting_repo import SightingRepository
+from repositories.job_repo import JobRepository
+
+logger.add("logs/newapi.log", rotation="10 MB")
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
@@ -76,38 +83,20 @@ app.mount("/audio", StaticFiles(directory=AUDIO_FOLDER), name="custom_audio")
 # ==========================================
 print("⏳ Connecting to Redis...")
 # Do alag connections: text alerts ke liye (r), aur video frames ke liye (r_bytes)
-r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
-r_bytes = redis.Redis(host='localhost', port=6379, db=0) 
+r = redis.Redis(host=settings.redis_host, port=settings.redis_port, db=0, decode_responses=True)
+r_bytes = redis.Redis(host=settings.redis_host, port=settings.redis_port, db=0) 
 
 print("⏳ Connecting to Milvus...")
-milvus_client = MilvusClient(uri="http://localhost:19530")
+milvus_client = MilvusClient(uri=settings.milvus_uri)
 COLLECTION_NAME = "face_embeddings"
 
 # ==========================================
 # PostgreSQL CONNECTION POOL
 # ==========================================
-# Opens a fixed pool of persistent connections at startup.
-# Each request borrows one connection and returns it when done —
-# no TCP handshake overhead per request, no risk of exhausting
-# PostgreSQL's max_connections limit under concurrent load.
-#
-# minconn=2  — always keep 2 connections warm (instant availability)
-# maxconn=10 — hard ceiling; requests block if all 10 are in use
-#              rather than spawning unlimited raw connections.
-#
-# ⚠️ DB credentials below should also be moved to env vars
-#    (see notes.md § Known Issues #5 / BUG-005 tracking item).
-_PG_DSN = dict(
-    dbname="surveillance",
-    user="admin",
-    password="password",
-    host="localhost",
-    port="5432",
-)
-
-print("⏳ Initialising PostgreSQL connection pool (2–10 connections)...")
-_pg_pool = ThreadedConnectionPool(minconn=2, maxconn=10, **_PG_DSN)
-print("✅ PostgreSQL pool ready.")
+# The ThreadedConnectionPool is now managed by database.py
+# We map db_pool to _pg_pool here to maintain backwards compatibility 
+# for legacy endpoints that haven't been migrated to the Repository pattern yet.
+_pg_pool = db_pool
 
 print("⏳ Loading InsightFace AI model for FastAPI Enrollment...")
 # 🎯 Absolute Path Fix: Dynamically track the 'models' folder at the project root
@@ -532,19 +521,13 @@ async def search_by_image(
 # 8. DOSSIER / TIMELINE SEARCH
 # ==========================================
 @app.get("/api/investigate/person/{person_id}")
-async def get_person_timeline(person_id: str):
+async def get_person_timeline(
+    person_id: str,
+    conn = Depends(get_db_connection)
+):
     """Pulls Dossier and formats paths correctly for React UI Timeline."""
-    conn = get_pg_connection()
-    try:
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute(
-            "SELECT camera_id, timestamp, image_path FROM sightings WHERE person_id = %s ORDER BY timestamp ASC", 
-            (person_id,)
-        )
-        records = cursor.fetchall()
-    finally:
-        if 'cursor' in locals() and cursor: cursor.close()
-        if 'conn' in locals() and conn: conn.close()
+    repo = SightingRepository(conn)
+    records = repo.get_timeline_by_person_id(person_id)
 
     if not records:
         raise HTTPException(status_code=404, detail="Person ID not found.")
@@ -581,10 +564,21 @@ import uuid
 import subprocess
 from fastapi import BackgroundTasks
 
+from pydantic import field_validator
+
 class NVRSearchRequest(BaseModel):
     camera_id: str
     start_time: int
     end_time: int
+
+    @field_validator('end_time')
+    def validate_time_range(cls, end_time, info):
+        start_time = info.data.get('start_time')
+        if start_time and end_time <= start_time:
+            raise ValueError("end_time must be strictly greater than start_time")
+        if end_time > int(datetime.now().timestamp()):
+            raise ValueError("end_time cannot be in the future")
+        return end_time
 
 def run_nvr_historic_extraction(camera_id: str, start_time: int, end_time: int, session_id: str):
     script_path = os.path.join("..", "Ingestion", "producer_historic.py")
@@ -603,18 +597,20 @@ def run_nvr_historic_extraction(camera_id: str, start_time: int, end_time: int, 
             cur = conn.cursor()
             cur.execute("UPDATE historical_jobs SET status = 'FAILED_TIMEOUT' WHERE session_id = %s", (session_id,))
             conn.commit()
-        except Exception: pass
+        except Exception as e_timeout:
+            logger.error(f"Failed to update FAILED_TIMEOUT for session {session_id}: {e_timeout}")
         finally:
             if 'cur' in locals() and cur: cur.close()
             if 'conn' in locals() and conn: conn.close()
     except Exception as e:
-        print(f"[FATAL] Session {session_id} crashed: {e}")
+        logger.exception(f"[FATAL] Session {session_id} crashed: {e}")
         try:
             conn = get_pg_connection()
             cur = conn.cursor()
             cur.execute("UPDATE historical_jobs SET status = 'FAILED_CRASH' WHERE session_id = %s", (session_id,))
             conn.commit()
-        except Exception: pass
+        except Exception as e_crash:
+            logger.error(f"Failed to update FAILED_CRASH for session {session_id}: {e_crash}")
         finally:
             if 'cur' in locals() and cur: cur.close()
             if 'conn' in locals() and conn: conn.close()
@@ -623,23 +619,19 @@ def run_nvr_historic_extraction(camera_id: str, start_time: int, end_time: int, 
 async def start_nvr_search(
     req: NVRSearchRequest, 
     background_tasks: BackgroundTasks,
-    current_user: dict = Depends(require_admin)
+    current_user: dict = Depends(require_admin),
+    conn = Depends(get_db_connection)
 ):
     session_id = str(uuid.uuid4())
-    conn = get_pg_connection()
-    cursor = conn.cursor()
+    repo = JobRepository(conn)
+    
     try:
-        cursor.execute("""
-            INSERT INTO historical_jobs (session_id, camera_id, status)
-            VALUES (%s, %s, 'IN_PROGRESS')
-        """, (session_id, req.camera_id))
+        repo.create_job(session_id, req.camera_id)
         conn.commit()
     except Exception as e:
         conn.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        cursor.close()
-        conn.close()
+        # 🚨 Phase 2: Obscure raw DB exception from the client payload
+        raise HTTPException(status_code=500, detail="Internal server error while initializing extraction job.")
 
     background_tasks.add_task(run_nvr_historic_extraction, req.camera_id, req.start_time, req.end_time, session_id)
     return {"status": "success", "session_id": session_id}
