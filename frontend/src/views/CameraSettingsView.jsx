@@ -52,10 +52,16 @@ const CameraSettingsView = () => {
         e.preventDefault();
         setIsSubmitting(true);
         try {
+            // Pydantic expects null for empty Optional[float] and Optional[int]
+            const payload = { ...formData };
+            if (payload.latitude === '') payload.latitude = null;
+            if (payload.longitude === '') payload.longitude = null;
+            if (payload.nvr_channel === '') payload.nvr_channel = null;
+
             if (isEditing) {
-                await api.put(`/api/cameras/edit/${formData.camera_id}`, formData);
+                await api.put(`/api/cameras/edit/${payload.camera_id}`, payload);
             } else {
-                await api.post('/api/cameras/add', formData);
+                await api.post('/api/cameras/add', payload);
             }
             // Reset form
             setFormData({
