@@ -1152,4 +1152,18 @@ Changed the SQL statement to a standard `INSERT` and added a `try/except` block 
 
 
 
-
+
+The ghost embeddings are still physically sitting inside your Milvus watchlist_faces collection. The fix above just ignores them at runtime. To permanently purge them, you still need to run python nuke_system.py on your lab machine. That will drop the entire Milvus collection and give you a completely clean slate.
+
+### 🐛 BUG-026 — Milvus Cosine Metric Inversion Bug
+**Date Fixed:** 2026-06-10  
+**Files:** `backend_api/newapi.py`  
+**Severity:** 🔴 High (False Positives / Logic Error)
+
+#### Root Cause
+When Milvus is configured with `metric_type="COSINE"`, the `distance` field returned in the search results is actually the **Cosine Similarity** (where higher is better, ranging up to 1.0), not the Cosine Distance (where smaller is better). 
+
+The `/api/investigate/search_by_image` endpoint was incorrectly treating the result as a true distance. The filter logic `match['distance'] <= (1.0 - threshold)` actively filtered OUT high-similarity matches and ONLY returned faces with a similarity score below 0.40 (i.e. terrible matches). When mapping this score to the UI, the frontend displayed these terrible matches as "High Matches" due to an inverted math correction (`1.0 - distance`), leading to completely mismatched suspect faces showing 80% similarity.
+
+#### Fix Applied
+Rewrote the threshold filtering logic in `newapi.py` to natively use the similarity metric: `if match['distance'] >= threshold:`. The raw similarity score is now correctly passed directly to the `match_score` field without inversion, allowing the `InvestigatorView` to accurately label and display matches.
