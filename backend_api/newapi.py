@@ -659,8 +659,20 @@ def run_nvr_historic_extraction(camera_id: str, start_time: int, end_time: int, 
         finally:
             if 'cur' in locals() and cur: cur.close()
             if 'conn' in locals() and conn: conn.close()
+    except subprocess.CalledProcessError as e:
+        logger.error(f"[FATAL] Session {session_id} child process exited with error code {e.returncode}")
+        try:
+            conn = get_pg_connection()
+            cur = conn.cursor()
+            cur.execute("UPDATE historical_jobs SET status = 'FAILED_CRASH' WHERE session_id = %s", (session_id,))
+            conn.commit()
+        except Exception as e_crash:
+            logger.error(f"Failed to update FAILED_CRASH for session {session_id}: {e_crash}")
+        finally:
+            if 'cur' in locals() and cur: cur.close()
+            if 'conn' in locals() and conn: conn.close()
     except Exception as e:
-        logger.exception(f"[FATAL] Session {session_id} crashed: {e}")
+        logger.exception(f"[FATAL] Session {session_id} crashed with unexpected error: {e}")
         try:
             conn = get_pg_connection()
             cur = conn.cursor()
