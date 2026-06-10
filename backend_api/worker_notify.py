@@ -6,6 +6,7 @@ import re
 import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.image import MIMEImage
 
 from loguru import logger
 import redis.asyncio as redis_async
@@ -58,6 +59,12 @@ def send_threat_email(alert_data, recipient_emails):
     cam_id = alert_data.get('camera_id', 'Unknown Camera')
     timestamp = time.ctime(alert_data.get('timestamp', time.time()))
 
+    live_image_url = alert_data.get('live_image')
+    reference_image_url = alert_data.get('reference_image')
+    
+    live_image_path = live_image_url.replace("/images/", "captured_faces/") if live_image_url else None
+    reference_image_path = reference_image_url.replace("/images/", "captured_faces/") if reference_image_url else None
+
     subject = f"🚨 C.O.R.E. ALERT: Level {risk_level} Threat Detected - {suspect_name}"
 
     html_body = f"""
@@ -75,6 +82,21 @@ def send_threat_email(alert_data, recipient_emails):
                         Risk Level: {risk_level}
                     </span>
                     <hr style="border: 0; border-top: 1px solid #1e293b; margin: 25px 0;">
+                    
+                    <table style="width: 100%; border-collapse: separate; border-spacing: 10px 0;">
+                        <tr>
+                            <td style="width: 50%; text-align: center; background-color: #1e293b; padding: 10px; border-radius: 8px;">
+                                <span style="color: #94a3b8; font-size: 12px; text-transform: uppercase; display: block; margin-bottom: 8px;">Live Capture</span>
+                                <img src="cid:live_image" style="width: 100%; max-height: 200px; object-fit: contain; border-radius: 4px; border: 1px solid #334155;" alt="Live Capture">
+                            </td>
+                            <td style="width: 50%; text-align: center; background-color: #1e293b; padding: 10px; border-radius: 8px;">
+                                <span style="color: #94a3b8; font-size: 12px; text-transform: uppercase; display: block; margin-bottom: 8px;">Database Profile</span>
+                                <img src="cid:ref_image" style="width: 100%; max-height: 200px; object-fit: contain; border-radius: 4px; border: 1px solid #334155;" alt="Database Profile">
+                            </td>
+                        </tr>
+                    </table>
+                    <br>
+
                     <table style="width: 100%; border-collapse: collapse;">
                         <tr>
                             <td style="padding: 10px 0;">
@@ -106,6 +128,28 @@ def send_threat_email(alert_data, recipient_emails):
 
     part = MIMEText(html_body, "html")
     msg.attach(part)
+
+    # Attach Live Image
+    if live_image_path and os.path.exists(live_image_path):
+        try:
+            with open(live_image_path, "rb") as f:
+                img_live = MIMEImage(f.read())
+            img_live.add_header('Content-ID', '<live_image>')
+            img_live.add_header('Content-Disposition', 'inline')
+            msg.attach(img_live)
+        except Exception as e:
+            logger.error(f"Failed to attach live image: {e}")
+
+    # Attach Reference Image
+    if reference_image_path and os.path.exists(reference_image_path):
+        try:
+            with open(reference_image_path, "rb") as f:
+                img_ref = MIMEImage(f.read())
+            img_ref.add_header('Content-ID', '<ref_image>')
+            img_ref.add_header('Content-Disposition', 'inline')
+            msg.attach(img_ref)
+        except Exception as e:
+            logger.error(f"Failed to attach reference image: {e}")
 
     try:
         server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
