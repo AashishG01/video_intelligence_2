@@ -59,6 +59,8 @@ def _sync_scan_nvr(ip, port, user, password):
         return cameras
     except Exception as e:
         logger.error(f"❌ ONVIF Connection Failed: {e}")
+        if "Sender not Authorized" in str(e):
+            raise ValueError("NVR rejected credentials. Ensure: 1) Password is correct. 2) A dedicated 'ONVIF User' is created in the NVR Network settings. 3) The NVR system time matches your computer's time (Replay Attack Protection).")
         raise
 
 async def async_scan_nvr(ip, port, user, password):
