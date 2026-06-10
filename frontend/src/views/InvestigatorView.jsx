@@ -268,6 +268,8 @@ const InvestigatorView = () => {
     const [nvrStatus, setNvrStatus] = useState(() => localStorage.getItem('nvrSessionId') ? 'IN_PROGRESS' : null);
     const [nvrProgress, setNvrProgress] = useState(0);
     const [nvrError, setNvrError] = useState(null);
+    const [nvrSearchResults, setNvrSearchResults] = useState(null);
+    const [isNvrSearching, setIsNvrSearching] = useState(false);
 
     useEffect(() => {
         if (activeTab === 'NVR_SEARCH' && cameras.length === 0) {
@@ -338,6 +340,31 @@ const InvestigatorView = () => {
         } catch (err) {
             setNvrError(err.message);
             setNvrStatus(null);
+        }
+    };
+
+    const handleNvrInlineSearch = async () => {
+        if (!processedFile) { setNvrError("Please enhance and crop a suspect photo first."); return; }
+        setIsNvrSearching(true);
+        setNvrError(null);
+        setNvrSearchResults(null);
+        
+        const start_ts = Math.floor(new Date(nvrForm.start_time).getTime() / 1000);
+        const end_ts = Math.floor(new Date(nvrForm.end_time).getTime() / 1000);
+
+        const formData = new FormData();
+        formData.append("file", processedFile); 
+
+        let url = `${BACKEND_URL}/api/investigate/search_by_image?threshold=${searchThreshold}&camera_id=${encodeURIComponent(nvrForm.camera_id)}&start_time=${start_ts}&end_time=${end_ts}`;
+
+        try {
+            const response = await api.post(url.replace(BACKEND_URL, ''), formData);
+            const data = response.data;
+            setNvrSearchResults(data.sightings || []);
+        } catch (err) {
+            setNvrError(err.response?.data?.detail || err.message || "Inline search failed.");
+        } finally {
+            setIsNvrSearching(false);
         }
     };
 
@@ -582,18 +609,12 @@ const InvestigatorView = () => {
                             <p className="text-sm mt-1 mb-3">The footage has been processed by the AI worker.</p>
                             {processedFile ? (
                                 <button 
-                                    onClick={() => { 
-                                        setNvrStatus(null); 
-                                        setNvrSessionId(null); 
-                                        localStorage.removeItem('nvrSessionId');
-                                        setActiveTab('IMG_SEARCH'); 
-                                        const start_ts = Math.floor(new Date(nvrForm.start_time).getTime() / 1000);
-                                        const end_ts = Math.floor(new Date(nvrForm.end_time).getTime() / 1000);
-                                        setTimeout(() => handleSearch({ camera_id: nvrForm.camera_id, start_time: start_ts, end_time: end_ts }), 300); 
-                                    }}
-                                    className="bg-blue-600 text-white font-bold px-6 py-2.5 rounded-lg shadow-md hover:bg-blue-700 transition-colors text-sm flex items-center"
+                                    onClick={() => handleNvrInlineSearch()}
+                                    disabled={isNvrSearching}
+                                    className="bg-blue-600 text-white font-bold px-6 py-2.5 rounded-lg shadow-md hover:bg-blue-700 transition-colors text-sm flex items-center disabled:opacity-50"
                                 >
-                                    <UserSearch className="w-4 h-4 mr-2" /> Auto-Search Suspect Now
+                                    {isNvrSearching ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <UserSearch className="w-4 h-4 mr-2" />}
+                                    {isNvrSearching ? "Searching Extracted Footage..." : "Auto-Search Suspect Now"}
                                 </button>
                             ) : (
                                 <button 
@@ -602,6 +623,25 @@ const InvestigatorView = () => {
                                 >
                                     Jump to Dossier Search
                                 </button>
+                            )}
+                        </div>
+                    )}
+                    
+                    {nvrSearchResults && !isNvrSearching && (
+                        <div className="mt-8 space-y-4">
+                            {nvrSearchResults.length > 0 ? (
+                                <>
+                                    <h3 className="text-lg font-semibold text-slate-800 mb-4 flex items-center">
+                                        <AlertCircle className="w-5 h-5 mr-2 text-blue-500" /> Found {nvrSearchResults.length} sightings in Extracted Footage
+                                    </h3>
+                                    {nvrSearchResults.map((res, idx) => <SightingCard key={idx} data={res} />)}
+                                </>
+                            ) : (
+                                <div className="text-center p-8 bg-slate-50 border border-slate-200 rounded-lg text-slate-500">
+                                    <Search className="w-8 h-8 mx-auto mb-3 text-slate-400" />
+                                    <p className="font-medium text-lg">No matches found in this footage.</p>
+                                    <p className="text-sm mt-1">Try lowering the strictness level or searching a different time window.</p>
+                                </div>
                             )}
                         </div>
                     )}
