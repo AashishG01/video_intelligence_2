@@ -91,8 +91,15 @@ const LiveMonitorView = ({ liveAlerts }) => {
     const [cameras, setCameras] = useState([]);
     const [camStatus, setCamStatus] = useState({});
     
-    // Dynamic array of active camera IDs
-    const [activeCameras, setActiveCameras] = useState([]);
+    // Dynamic array of active camera IDs, persisted to localStorage
+    const [activeCameras, setActiveCameras] = useState(() => {
+        const saved = localStorage.getItem('liveMonitorCameras');
+        return saved ? JSON.parse(saved) : [];
+    });
+
+    useEffect(() => {
+        localStorage.setItem('liveMonitorCameras', JSON.stringify(activeCameras));
+    }, [activeCameras]);
 
     // Fetch dynamic cameras from PostgreSQL backend
     useEffect(() => {
