@@ -350,11 +350,6 @@ def startup_db_check():
         
         cursor.execute("""
             ALTER TABLE cameras DROP CONSTRAINT IF EXISTS check_nvr_fields;
-            ALTER TABLE cameras ADD CONSTRAINT check_nvr_fields 
-            CHECK (
-                (nvr_brand IS NULL AND nvr_ip IS NULL AND nvr_channel IS NULL) OR 
-                (nvr_brand IS NOT NULL AND nvr_ip IS NOT NULL AND nvr_channel IS NOT NULL)
-            );
         """)
         
         cursor.execute("""
