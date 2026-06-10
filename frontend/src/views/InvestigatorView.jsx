@@ -6,6 +6,7 @@ import {
 import ReactCrop, { centerCrop, makeAspectCrop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import { BACKEND_URL } from '../config';
+import api from '../api';
 import SightingCard from '../components/SightingCard';
 import TimelineCard from '../components/TimelineCard';
 
@@ -269,9 +270,8 @@ const InvestigatorView = () => {
 
     useEffect(() => {
         if (activeTab === 'NVR_SEARCH' && cameras.length === 0) {
-            fetch(`${BACKEND_URL}/api/cameras`)
-                .then(r => r.json())
-                .then(data => setCameras(data))
+            api.get('/api/cameras')
+                .then(r => setCameras(r.data))
                 .catch(e => console.error("Error fetching cameras:", e));
         }
     }, [activeTab]);
@@ -281,13 +281,11 @@ const InvestigatorView = () => {
         if (nvrSessionId && nvrStatus !== 'COMPLETED') {
             interval = setInterval(async () => {
                 try {
-                    const res = await fetch(`${BACKEND_URL}/api/investigate/status/${nvrSessionId}`);
-                    if (res.ok) {
-                        const data = await res.json();
-                        setNvrStatus(data.status);
-                        if (data.status === 'COMPLETED') {
-                            clearInterval(interval);
-                        }
+                    const res = await api.get(`/api/investigate/status/${nvrSessionId}`);
+                    const data = res.data;
+                    setNvrStatus(data.status);
+                    if (data.status === 'COMPLETED') {
+                        clearInterval(interval);
                     }
                 } catch (e) {
                     console.error("Status check failed", e);
@@ -310,17 +308,12 @@ const InvestigatorView = () => {
         const end_ts = Math.floor(new Date(nvrForm.end_time).getTime() / 1000);
 
         try {
-            const res = await fetch(`${BACKEND_URL}/api/investigate/nvr_search`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    camera_id: nvrForm.camera_id,
-                    start_time: start_ts,
-                    end_time: end_ts
-                })
+            const res = await api.post('/api/investigate/nvr_search', {
+                camera_id: nvrForm.camera_id,
+                start_time: start_ts,
+                end_time: end_ts
             });
-            if (!res.ok) throw new Error("Failed to start NVR extraction.");
-            const data = await res.json();
+            const data = res.data;
             setNvrSessionId(data.session_id);
             setNvrStatus('IN_PROGRESS');
         } catch (err) {
@@ -370,16 +363,12 @@ const InvestigatorView = () => {
         if (filters && filters.end_time) url += `&end_time=${filters.end_time}`;
 
         try {
-            const response = await fetch(url, {
-                method: 'POST',
-                body: formData,
-            });
-            if (!response.ok) throw new Error("Database search failed.");
-            const data = await response.json();
+            const response = await api.post(url.replace(BACKEND_URL, ''), formData);
+            const data = response.data;
             setSearchResults(data.sightings || []);
             setHasSearched(true);
         } catch (err) {
-            setErrorMsg(err.message);
+            setErrorMsg(err.response?.data?.detail || err.message || "Database search failed.");
         } finally {
             setIsSearching(false);
         }
@@ -392,13 +381,12 @@ const InvestigatorView = () => {
         setIdSearchResults(null);
         setPersonDossier(null);
         try {
-            const res = await fetch(`${BACKEND_URL}/api/investigate/person/${searchId.trim()}`);
-            if (!res.ok) throw new Error("Person ID not found.");
-            const data = await res.json();
+            const res = await api.get(`/api/investigate/person/${searchId.trim()}`);
+            const data = res.data;
             setPersonDossier(data);
             setIdSearchResults(data.timeline || []);
         } catch (err) {
-            setIdSearchError(err.message);
+            setIdSearchError(err.response?.data?.detail || err.message || "Person ID not found.");
         } finally {
             setIsIdSearching(false);
         }
