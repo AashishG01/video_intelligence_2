@@ -11,6 +11,7 @@ import urllib.parse
 import sys
 from loguru import logger
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 logger.add("logs/producer_historic.log", rotation="10 MB")
 
@@ -70,9 +71,16 @@ def main():
     nvr_user = cam.get('nvr_user')
     nvr_channel = cam.get('nvr_channel', 1)
 
-    # Convert timestamps to local datetime objects to respect NVR local timezone
-    dt_start = datetime.fromtimestamp(args.start)
-    dt_end = datetime.fromtimestamp(args.end)
+    # Establish the physical deployment timezone to prevent Docker UTC overrides
+    try:
+        deployment_tz = ZoneInfo(settings.system_timezone)
+    except Exception as e:
+        log.warning(f"Invalid timezone '{settings.system_timezone}', falling back to UTC.")
+        deployment_tz = ZoneInfo("UTC")
+
+    # Convert timestamps to timezone-aware datetime objects to respect NVR local clock
+    dt_start = datetime.fromtimestamp(args.start, tz=deployment_tz)
+    dt_end = datetime.fromtimestamp(args.end, tz=deployment_tz)
 
     if nvr_brand == 'uniview':
         replay_url = f"rtsp://{nvr_user}:{encoded_pass}@{nvr_ip}:554/c{nvr_channel}/b{args.start}/e{args.end}/replay"

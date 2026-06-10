@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     
     milvus_uri: str = "http://localhost:19530"
+    
+    system_timezone: str = "Asia/Kolkata" # NVR Deployment timezone
 
     jwt_secret_key: str = ""
     
