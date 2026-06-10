@@ -19,8 +19,8 @@ logger.add("logs/producer_historic.log", rotation="10 MB")
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend_api'))
 from config import settings
 
-# Force TCP for RTSP to prevent UDP packet loss
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+# Force TCP for RTSP to prevent UDP packet loss, and set a 5-second connection timeout
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;5000000"
 
 # Connect to local Redis
 r = redis.Redis(host=settings.redis_host, port=settings.redis_port, db=0)
