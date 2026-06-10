@@ -499,8 +499,8 @@ async def search_by_image(
         cursor = conn.cursor(cursor_factory=RealDictCursor)
 
         for match in search_res[0]:
-            max_allowed_distance = 1.0 - threshold
-            if match['distance'] <= max_allowed_distance:
+            # Milvus COSINE metric returns the exact Cosine Similarity.
+            if match['distance'] >= threshold:
                 person_id = match['entity']['person_id']
                 
                 query = "SELECT camera_id, timestamp, image_path FROM sightings WHERE person_id = %s"
@@ -532,7 +532,7 @@ async def search_by_image(
                         "person_id": person_id,
                         "camera": record["camera_id"],
                         "timestamp": readable_time,
-                        "match_score": round(1.0 - match['distance'], 4),
+                        "match_score": round(match['distance'], 4),
                         "image_url": formatted_image_url
                     })
 
