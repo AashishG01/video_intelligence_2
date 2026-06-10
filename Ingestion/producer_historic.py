@@ -70,7 +70,9 @@ def main():
     nvr_brand = (cam.get('nvr_brand') or "").lower()
     
     # 1. Build Replay URL
-    encoded_pass = urllib.parse.quote(cam.get('nvr_pass') or "")
+    # Prevent double URL-encoding if the user already saved an encoded password (e.g. Admin%40123)
+    raw_pass = urllib.parse.unquote(cam.get('nvr_pass') or "")
+    encoded_pass = urllib.parse.quote(raw_pass)
     nvr_ip = cam.get('nvr_ip')
     nvr_user = cam.get('nvr_user')
     nvr_channel = cam.get('nvr_channel') or 1
