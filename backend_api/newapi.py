@@ -337,6 +337,26 @@ def startup_db_check():
             );
         """)
         
+        # Run Schema Migrations (Multi-Brand NVR Support)
+        cursor.execute("""
+            ALTER TABLE cameras 
+            ADD COLUMN IF NOT EXISTS nvr_brand VARCHAR(50) DEFAULT NULL,
+            ADD COLUMN IF NOT EXISTS nvr_ip VARCHAR(45) DEFAULT NULL,
+            ADD COLUMN IF NOT EXISTS nvr_user VARCHAR(100) DEFAULT NULL,
+            ADD COLUMN IF NOT EXISTS nvr_pass VARCHAR(255) DEFAULT NULL,
+            ADD COLUMN IF NOT EXISTS nvr_channel INT DEFAULT NULL,
+            ADD COLUMN IF NOT EXISTS onvif_token VARCHAR(255) DEFAULT NULL;
+        """)
+        
+        cursor.execute("""
+            ALTER TABLE cameras DROP CONSTRAINT IF EXISTS check_nvr_fields;
+            ALTER TABLE cameras ADD CONSTRAINT check_nvr_fields 
+            CHECK (
+                (nvr_brand IS NULL AND nvr_ip IS NULL AND nvr_channel IS NULL) OR 
+                (nvr_brand IS NOT NULL AND nvr_ip IS NOT NULL AND nvr_channel IS NOT NULL)
+            );
+        """)
+        
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS sightings (
                 id SERIAL PRIMARY KEY,
@@ -1403,8 +1423,29 @@ async def validate_camera_stream(camera: dict) -> dict:
         camera['is_alive'] = False
     return camera
 
+import re
+
+def extract_channel_from_token(token: str) -> int:
+    """
+    Safely extracts the channel integer from ONVIF Source Tokens.
+    Example: 'VideoSourceToken1' -> 1
+    Example: '000-00' -> Fallback to parsing RTSP URI if needed
+    """
+    if not token:
+        return 1
+    numbers = re.findall(r'\d+', token)
+    if numbers:
+        return int(numbers[-1])
+    return 1
+
+class BulkImportPayload(BaseModel):
+    nvr_info: dict = None
+    selected_cameras: list[dict]
+
 @app.post("/api/nvr/bulk_import")
-async def bulk_import_cameras(selected_cameras: list[dict]):
+async def bulk_import_cameras(payload: BulkImportPayload):
+    selected_cameras = payload.selected_cameras
+    nvr_info = payload.nvr_info or {}
     # Validate streams ONE AT A TIME to avoid exhausting NVR's RTSP connection limit.
     # Uniview NVRs typically allow only 4-6 simultaneous connections.
     validated_results = []
@@ -1423,12 +1464,26 @@ async def bulk_import_cameras(selected_cameras: list[dict]):
     cursor = conn.cursor()
     try:
         for cam in alive_cameras:
+            # Extract robust physical channel
+            nvr_channel = extract_channel_from_token(cam.get('onvif_token', ''))
+            
             # Default to 15 fps and "Auto-Discovered" location
             cursor.execute("""
-                INSERT INTO cameras (camera_id, camera_name, place, rtsp_url, fps_limit, is_active)
-                VALUES (%s, %s, %s, %s, 15, TRUE)
-                ON CONFLICT (camera_id) DO UPDATE SET rtsp_url = EXCLUDED.rtsp_url
-            """, (cam['camera_id'], cam['name'], "Auto-Discovered", cam['rtsp_url']))
+                INSERT INTO cameras (camera_id, camera_name, place, rtsp_url, fps_limit, is_active, nvr_brand, nvr_ip, nvr_user, nvr_pass, nvr_channel, onvif_token)
+                VALUES (%s, %s, %s, %s, 15, TRUE, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (camera_id) DO UPDATE SET 
+                    rtsp_url = EXCLUDED.rtsp_url,
+                    nvr_brand = EXCLUDED.nvr_brand,
+                    nvr_ip = EXCLUDED.nvr_ip,
+                    nvr_user = EXCLUDED.nvr_user,
+                    nvr_pass = EXCLUDED.nvr_pass,
+                    nvr_channel = EXCLUDED.nvr_channel,
+                    onvif_token = EXCLUDED.onvif_token
+            """, (
+                cam['camera_id'], cam['name'], "Auto-Discovered", cam['rtsp_url'],
+                nvr_info.get('brand'), nvr_info.get('ip'), nvr_info.get('user'), 
+                nvr_info.get('password'), nvr_channel, cam.get('onvif_token')
+            ))
         conn.commit()
     except Exception as e:
         logger.error(f"❌ Bulk import DB error: {e}")

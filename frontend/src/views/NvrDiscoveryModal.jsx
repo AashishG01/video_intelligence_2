@@ -4,7 +4,7 @@ import api from '../api';
 
 const NvrDiscoveryModal = ({ isOpen, onClose, onImportSuccess }) => {
     const [step, setStep] = useState(1); // 1: Input, 2: Scanning, 3: Results, 4: Importing
-    const [credentials, setCredentials] = useState({ ip: '', port: 80, user: 'admin', password: '' });
+    const [credentials, setCredentials] = useState({ brand: 'uniview', ip: '', port: 80, user: 'admin', password: '' });
     const [discoveredCameras, setDiscoveredCameras] = useState([]);
     const [selectedCameras, setSelectedCameras] = useState(new Set());
     const [importResult, setImportResult] = useState(null);
@@ -39,7 +39,16 @@ const NvrDiscoveryModal = ({ isOpen, onClose, onImportSuccess }) => {
         setImportResult(null);
         const camerasToImport = discoveredCameras.filter(c => selectedCameras.has(c.camera_id));
         try {
-            const res = await api.post('/api/nvr/bulk_import', camerasToImport);
+            const payload = {
+                nvr_info: {
+                    brand: credentials.brand,
+                    ip: credentials.ip,
+                    user: credentials.user,
+                    password: credentials.password
+                },
+                selected_cameras: camerasToImport
+            };
+            const res = await api.post('/api/nvr/bulk_import', payload);
             setImportResult(res.data);
             onImportSuccess();
         } catch (error) {
@@ -76,7 +85,15 @@ const NvrDiscoveryModal = ({ isOpen, onClose, onImportSuccess }) => {
                 <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
                     {step === 1 && (
                         <div className="space-y-4">
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-3 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase">NVR Brand</label>
+                                    <select className="mt-1 w-full border border-slate-200 rounded-lg p-3 bg-slate-50" value={credentials.brand} onChange={e => setCredentials({...credentials, brand: e.target.value})}>
+                                        <option value="uniview">Uniview</option>
+                                        <option value="hikvision">Hikvision</option>
+                                        <option value="cpplus">CP Plus</option>
+                                    </select>
+                                </div>
                                 <div>
                                     <label className="block text-xs font-bold text-slate-500 uppercase">NVR IP Address</label>
                                     <input type="text" className="mt-1 w-full border border-slate-200 rounded-lg p-3 bg-slate-50" placeholder="192.168.1.100" value={credentials.ip} onChange={e => setCredentials({...credentials, ip: e.target.value})} />

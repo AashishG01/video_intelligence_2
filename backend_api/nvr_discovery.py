@@ -42,9 +42,14 @@ def _sync_scan_nvr(ip, port, user, password):
                 else:
                     auth_uri = raw_uri
                 
+                # Extract the hardware token
+                vid_source = profile.VideoSourceConfiguration
+                true_token = vid_source.SourceToken if vid_source else None
+                
                 cameras.append({
                     "name": profile.Name,
                     "rtsp_url": auth_uri,
+                    "onvif_token": true_token,
                     "camera_id": f"cam_{profile.Name.lower().replace(' ', '_')}"
                 })
             except Exception as e:

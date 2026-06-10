@@ -10,6 +10,7 @@ from psycopg2.extras import RealDictCursor
 import urllib.parse
 import sys
 from loguru import logger
+from datetime import datetime
 
 logger.add("logs/producer_historic.log", rotation="10 MB")
 
@@ -57,13 +58,35 @@ def main():
     log.info(f"TIME MACHINE INITIALIZED. Time Window: {args.start} -> {args.end}")
 
     cam = get_nvr_config(args.camera_id)
-    if not cam or cam.get('nvr_brand') != 'uniview':
-        log.error("Camera is not configured as a Uniview NVR.")
+    if not cam:
+        log.error("Camera not found or has no NVR configuration.")
         return
 
+    nvr_brand = cam.get('nvr_brand', '').lower()
+    
     # 1. Build Replay URL
     encoded_pass = urllib.parse.quote(cam.get('nvr_pass') or "")
-    replay_url = f"rtsp://{cam['nvr_user']}:{encoded_pass}@{cam['nvr_ip']}:554/c{cam['nvr_channel']}/b{args.start}/e{args.end}/replay"
+    nvr_ip = cam.get('nvr_ip')
+    nvr_user = cam.get('nvr_user')
+    nvr_channel = cam.get('nvr_channel', 1)
+
+    # Convert timestamps to local datetime objects to respect NVR local timezone
+    dt_start = datetime.fromtimestamp(args.start)
+    dt_end = datetime.fromtimestamp(args.end)
+
+    if nvr_brand == 'uniview':
+        replay_url = f"rtsp://{nvr_user}:{encoded_pass}@{nvr_ip}:554/c{nvr_channel}/b{args.start}/e{args.end}/replay"
+    elif nvr_brand == 'hikvision':
+        hik_start = dt_start.strftime("%Y%m%dT%H%M%SZ")
+        hik_end = dt_end.strftime("%Y%m%dT%H%M%SZ")
+        replay_url = f"rtsp://{nvr_user}:{encoded_pass}@{nvr_ip}:554/Streaming/tracks/{nvr_channel}01/?starttime={hik_start}&endtime={hik_end}"
+    elif nvr_brand == 'cpplus' or nvr_brand == 'dahua':
+        cp_start = dt_start.strftime("%Y_%m_%d_%H_%M_%S")
+        cp_end = dt_end.strftime("%Y_%m_%d_%H_%M_%S")
+        replay_url = f"rtsp://{nvr_user}:{encoded_pass}@{nvr_ip}:554/cam/playback?channel={nvr_channel}&starttime={cp_start}&endtime={cp_end}"
+    else:
+        log.error(f"Unsupported NVR brand: {nvr_brand}")
+        return
     
     queue_name = f"historic_frames_queue:{args.session}"
     
