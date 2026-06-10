@@ -98,21 +98,26 @@ def main():
 
     if nvr_brand == 'uniview':
         replay_url = f"rtsp://{nvr_user}:{encoded_pass}@{nvr_ip}:554/c{nvr_channel}/b{args.start}/e{args.end}/replay/"
+        safe_url = f"rtsp://{nvr_user}:***@{nvr_ip}:554/c{nvr_channel}/b{args.start}/e{args.end}/replay/"
     elif nvr_brand == 'hikvision':
         hik_start = dt_start.strftime("%Y%m%dT%H%M%SZ")
         hik_end = dt_end.strftime("%Y%m%dT%H%M%SZ")
         replay_url = f"rtsp://{nvr_user}:{encoded_pass}@{nvr_ip}:554/Streaming/tracks/{nvr_channel}01/?starttime={hik_start}&endtime={hik_end}"
+        safe_url = f"rtsp://{nvr_user}:***@{nvr_ip}:554/Streaming/tracks/{nvr_channel}01/?starttime={hik_start}&endtime={hik_end}"
     elif nvr_brand == 'cpplus' or nvr_brand == 'dahua':
         cp_start = dt_start.strftime("%Y_%m_%d_%H_%M_%S")
         cp_end = dt_end.strftime("%Y_%m_%d_%H_%M_%S")
         replay_url = f"rtsp://{nvr_user}:{encoded_pass}@{nvr_ip}:554/cam/playback?channel={nvr_channel}&starttime={cp_start}&endtime={cp_end}"
+        safe_url = f"rtsp://{nvr_user}:***@{nvr_ip}:554/cam/playback?channel={nvr_channel}&starttime={cp_start}&endtime={cp_end}"
     else:
         log.error(f"Unsupported NVR brand: {nvr_brand}")
         sys.exit(1)
     
     queue_name = f"historic_frames_queue:{args.session}"
     
-    log.info("Connecting to NVR stream...")
+    log.info(f"Connecting to NVR stream... (Brand: {nvr_brand.upper()}, Channel: {nvr_channel})")
+    log.info(f"Generated Replay URL: {safe_url}")
+    
     cap = None
     try:
         cap = cv2.VideoCapture(replay_url, cv2.CAP_FFMPEG)
