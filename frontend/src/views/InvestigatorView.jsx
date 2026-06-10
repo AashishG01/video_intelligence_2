@@ -506,6 +506,21 @@ const InvestigatorView = () => {
                             </div>
                         )}
 
+                        {nvrStatus === 'IN_PROGRESS' && (
+                            <div className="mt-4 p-5 bg-blue-50 border border-blue-200 rounded-xl flex items-start">
+                                <div className="bg-blue-100 p-2 rounded-full mr-4 shrink-0">
+                                    <Clock className="w-5 h-5 text-blue-600 animate-pulse" />
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-blue-900 text-sm mb-1">Background AI Extraction Running</h4>
+                                    <p className="text-xs text-blue-700 leading-relaxed">
+                                        The AI worker is pulling the footage from the NVR and scanning it frame-by-frame. 
+                                        <strong> You can safely navigate away to other tabs or close this page.</strong> The process will continue running in the background and index any faces directly into the database.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+
                         <div className="pt-4 flex justify-end">
                             <button 
                                 onClick={handleNvrSubmit}
