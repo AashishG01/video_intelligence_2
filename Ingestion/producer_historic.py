@@ -61,7 +61,7 @@ def main():
     cam = get_nvr_config(args.camera_id)
     if not cam:
         log.error("Camera not found or has no NVR configuration.")
-        return
+        sys.exit(1)
 
     nvr_brand = (cam.get('nvr_brand') or "").lower()
     
@@ -94,7 +94,7 @@ def main():
         replay_url = f"rtsp://{nvr_user}:{encoded_pass}@{nvr_ip}:554/cam/playback?channel={nvr_channel}&starttime={cp_start}&endtime={cp_end}"
     else:
         log.error(f"Unsupported NVR brand: {nvr_brand}")
-        return
+        sys.exit(1)
     
     queue_name = f"historic_frames_queue:{args.session}"
     
@@ -105,7 +105,7 @@ def main():
         
         if not cap.isOpened():
             log.error("Failed to connect to NVR replay stream.")
-            return
+            sys.exit(1)
 
         original_fps = cap.get(cv2.CAP_PROP_FPS)
         if not original_fps or original_fps <= 0:
