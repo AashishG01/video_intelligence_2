@@ -443,7 +443,10 @@ const InvestigatorView = () => {
 
                     <div className="mb-6">
                         <label className="block text-sm font-semibold text-slate-700 mb-2">Optional: Target Suspect Photo</label>
-                        <div onClick={() => !previewUrl && fileInputRef.current?.click()} className={`relative border-2 border-dashed rounded-xl bg-slate-50 p-4 flex flex-col items-center justify-center text-center transition-all ${previewUrl ? 'border-blue-400 bg-blue-50/30' : 'border-slate-200 hover:bg-slate-100 cursor-pointer'}`}>
+                        <div className={`relative border-2 border-dashed rounded-xl bg-slate-50 p-4 flex flex-col items-center justify-center text-center transition-all ${previewUrl ? 'border-blue-400 bg-blue-50/30' : 'border-slate-200 hover:bg-slate-100 cursor-pointer'}`}>
+                            {!previewUrl && (
+                                <input type="file" accept="image/*" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={handleFileSelect} onClick={(e) => { e.target.value = null; }} />
+                            )}
                             {previewUrl ? (
                                 <div className="flex items-center gap-4 w-full">
                                     <div className="relative w-16 h-16 bg-slate-900 rounded-lg overflow-hidden shrink-0">
@@ -581,7 +584,10 @@ const InvestigatorView = () => {
 
             {activeTab === 'IMG_SEARCH' && (
                 <>
-                    <div onClick={() => !previewUrl && fileInputRef.current?.click()} className={`relative border-2 border-dashed rounded-2xl bg-white p-10 flex flex-col items-center justify-center text-center mb-6 transition-all shadow-inner ${previewUrl ? 'border-blue-400 bg-blue-50/30' : 'border-slate-300 hover:bg-slate-50 cursor-pointer'}`}>
+                    <div className={`relative border-2 border-dashed rounded-2xl bg-white p-10 flex flex-col items-center justify-center text-center mb-6 transition-all shadow-inner ${previewUrl ? 'border-blue-400 bg-blue-50/30' : 'border-slate-300 hover:bg-slate-50 cursor-pointer'}`}>
+                        {!previewUrl && (
+                            <input type="file" accept="image/*" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={handleFileSelect} onClick={(e) => { e.target.value = null; }} />
+                        )}
                         {previewUrl ? (
                             <div className="flex flex-col items-center w-full">
                                 <div className="relative flex justify-center w-48 h-48 bg-slate-900 p-2 rounded-xl shadow border border-slate-700 mb-3 overflow-hidden">
