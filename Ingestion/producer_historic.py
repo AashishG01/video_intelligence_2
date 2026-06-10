@@ -63,13 +63,13 @@ def main():
         log.error("Camera not found or has no NVR configuration.")
         return
 
-    nvr_brand = cam.get('nvr_brand', '').lower()
+    nvr_brand = (cam.get('nvr_brand') or "").lower()
     
     # 1. Build Replay URL
     encoded_pass = urllib.parse.quote(cam.get('nvr_pass') or "")
     nvr_ip = cam.get('nvr_ip')
     nvr_user = cam.get('nvr_user')
-    nvr_channel = cam.get('nvr_channel', 1)
+    nvr_channel = cam.get('nvr_channel') or 1
 
     # Establish the physical deployment timezone to prevent Docker UTC overrides
     try:
