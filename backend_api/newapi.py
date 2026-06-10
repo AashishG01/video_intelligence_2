@@ -1470,13 +1470,17 @@ def extract_channel_from_token(token: str) -> int:
     """
     Safely extracts the channel integer from ONVIF Source Tokens.
     Example: 'VideoSourceToken1' -> 1
-    Example: '000-00' -> Fallback to parsing RTSP URI if needed
+    Example: '100' or '101' -> 1 (Uniview Internal Stream IDs)
     """
     if not token:
         return 1
     numbers = re.findall(r'\d+', token)
     if numbers:
-        return int(numbers[-1])
+        raw_num = int(numbers[-1])
+        # Normalize Uniview internal tokens (e.g. 100, 101, 201) to physical channels (1, 2)
+        if raw_num >= 100:
+            return raw_num // 100
+        return raw_num
     return 1
 
 class BulkImportPayload(BaseModel):

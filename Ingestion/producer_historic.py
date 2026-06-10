@@ -92,8 +92,17 @@ def main():
         nvr_ip = parsed_url.hostname
 
     nvr_channel = cam.get('nvr_channel')
+    
+    # Uniview ONVIF tokens notoriously store internal IDs (100, 101) instead of true channels.
+    # We forcefully extract the real channel from the LIVE rtsp_url (e.g. /unicast/c2/s0/live)
+    import re
+    if nvr_brand == 'uniview':
+        match = re.search(r'/c(\d+)/', nvr_url)
+        if match:
+            nvr_channel = match.group(1)
+            
+    # Fallback for other brands
     if not nvr_channel:
-        import re
         match = re.search(r'/c(\d+)/', nvr_url)
         nvr_channel = match.group(1) if match else 1
 
