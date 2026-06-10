@@ -532,7 +532,7 @@ async def search_by_image(
                         "person_id": person_id,
                         "camera": record["camera_id"],
                         "timestamp": readable_time,
-                        "match_score": round(match['distance'], 4),
+                        "match_score": round(1.0 - match['distance'], 4),
                         "image_url": formatted_image_url
                     })
 
