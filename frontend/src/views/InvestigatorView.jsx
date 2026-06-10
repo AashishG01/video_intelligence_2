@@ -415,6 +415,9 @@ const InvestigatorView = () => {
                 />
             )}
 
+            {/* Hidden globally so all tabs can trigger an upload */}
+            <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleFileSelect} />
+
             <div className="mb-8">
                 <h2 className="text-2xl font-bold text-slate-800 mb-2">Subject Investigation</h2>
                 <p className="text-slate-500">Search the database using cropped forensic images.</p>
@@ -566,7 +569,6 @@ const InvestigatorView = () => {
 
             {activeTab === 'IMG_SEARCH' && (
                 <>
-                    <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleFileSelect} />
                     <div onClick={() => !previewUrl && fileInputRef.current?.click()} className={`relative border-2 border-dashed rounded-2xl bg-white p-10 flex flex-col items-center justify-center text-center mb-6 transition-all shadow-inner ${previewUrl ? 'border-blue-400 bg-blue-50/30' : 'border-slate-300 hover:bg-slate-50 cursor-pointer'}`}>
                         {previewUrl ? (
                             <div className="flex flex-col items-center w-full">
