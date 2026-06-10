@@ -298,6 +298,14 @@ const InvestigatorView = () => {
                     }
                 } catch (e) {
                     console.error("Status check failed", e);
+                    // If the server restarted and lost the job, or returned an error, clear the stuck UI
+                    if (e.response && (e.response.status === 404 || e.response.status >= 500)) {
+                        clearInterval(interval);
+                        setNvrError("Extraction job was lost or terminated by the server.");
+                        setNvrStatus(null);
+                        setNvrSessionId(null);
+                        localStorage.removeItem('nvrSessionId');
+                    }
                 }
             }, 3000);
         }
@@ -538,7 +546,19 @@ const InvestigatorView = () => {
                             </div>
                         )}
 
-                        <div className="pt-4 flex justify-end">
+                        <div className="pt-4 flex justify-end gap-3">
+                            {(nvrStatus === 'IN_PROGRESS' || nvrStatus === 'STARTING...') && (
+                                <button 
+                                    onClick={() => {
+                                        setNvrStatus(null);
+                                        setNvrSessionId(null);
+                                        localStorage.removeItem('nvrSessionId');
+                                    }}
+                                    className="bg-white border border-slate-300 text-slate-700 font-bold px-6 py-2.5 rounded-lg hover:bg-slate-50 transition-colors shadow-sm flex items-center"
+                                >
+                                    <X className="w-4 h-4 mr-2" /> Cancel / Clear
+                                </button>
+                            )}
                             <button 
                                 onClick={handleNvrSubmit}
                                 disabled={nvrStatus === 'IN_PROGRESS' || nvrStatus === 'STARTING...'}
