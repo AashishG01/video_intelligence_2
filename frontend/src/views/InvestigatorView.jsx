@@ -266,6 +266,7 @@ const InvestigatorView = () => {
     const [nvrForm, setNvrForm] = useState({ camera_id: '', start_time: '', end_time: '' });
     const [nvrSessionId, setNvrSessionId] = useState(() => localStorage.getItem('nvrSessionId'));
     const [nvrStatus, setNvrStatus] = useState(() => localStorage.getItem('nvrSessionId') ? 'IN_PROGRESS' : null);
+    const [nvrProgress, setNvrProgress] = useState(0);
     const [nvrError, setNvrError] = useState(null);
 
     useEffect(() => {
@@ -292,6 +293,8 @@ const InvestigatorView = () => {
                         setNvrStatus(null);
                         setNvrSessionId(null);
                         localStorage.removeItem('nvrSessionId');
+                    } else if (data.frames_processed !== undefined) {
+                        setNvrProgress(data.frames_processed);
                     }
                 } catch (e) {
                     console.error("Status check failed", e);
@@ -524,6 +527,9 @@ const InvestigatorView = () => {
                                 </div>
                                 <div>
                                     <h4 className="font-bold text-blue-900 text-sm mb-1">Background AI Extraction Running</h4>
+                                    <p className="text-xs text-blue-700 leading-relaxed font-semibold mb-2">
+                                        Frames Processed: <span className="bg-blue-200 text-blue-800 px-1.5 py-0.5 rounded">{nvrProgress}</span>
+                                    </p>
                                     <p className="text-xs text-blue-700 leading-relaxed">
                                         The AI worker is pulling the footage from the NVR and scanning it frame-by-frame. 
                                         <strong> You can safely navigate away to other tabs or close this page.</strong> The process will continue running in the background and index any faces directly into the database.

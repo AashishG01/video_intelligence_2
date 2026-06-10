@@ -160,7 +160,7 @@ def main():
             processed_count += 1
             
             if processed_count % 10 == 0:
-                pass # Removed noisy print
+                r.setex(f"nvr_progress:{args.session}", 3600, processed_count)
 
     except Exception as e:
         log.exception(f"Extraction aborted due to error: {e}")

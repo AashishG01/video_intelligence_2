@@ -680,7 +680,15 @@ async def get_nvr_search_status(session_id: str, current_user: dict = Depends(ge
         
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return {"status": job['status']}
+
+    # Fetch real-time progress from Redis
+    r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+    progress = r.get(f"nvr_progress:{session_id}") or "0"
+
+    return {
+        "status": job['status'],
+        "frames_processed": int(progress)
+    }
 
 
 # ==========================================
