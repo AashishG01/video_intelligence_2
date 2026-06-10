@@ -77,11 +77,23 @@ def main():
     nvr_ip = cam.get('nvr_ip')
     nvr_user = cam.get('nvr_user')
     
-    # Intelligently extract the channel
+    # Intelligently extract missing fields from the LIVE RTSP URL if DB columns are empty
+    nvr_url = cam.get('rtsp_url') or ""
+    parsed_url = urllib.parse.urlparse(nvr_url)
+    
+    if not nvr_user and parsed_url.username:
+        nvr_user = urllib.parse.unquote(parsed_url.username)
+        
+    if not cam.get('nvr_pass') and parsed_url.password:
+        raw_pass = urllib.parse.unquote(parsed_url.password)
+        encoded_pass = urllib.parse.quote(raw_pass)
+        
+    if not nvr_ip and parsed_url.hostname:
+        nvr_ip = parsed_url.hostname
+
     nvr_channel = cam.get('nvr_channel')
     if not nvr_channel:
         import re
-        nvr_url = cam.get('rtsp_url') or ""
         match = re.search(r'/c(\d+)/', nvr_url)
         nvr_channel = match.group(1) if match else 1
 
@@ -97,8 +109,8 @@ def main():
     dt_end = datetime.fromtimestamp(args.end, tz=deployment_tz)
 
     if nvr_brand == 'uniview':
-        replay_url = f"rtsp://{nvr_user}:{encoded_pass}@{nvr_ip}:554/c{nvr_channel}/b{args.start}/e{args.end}/replay/"
-        safe_url = f"rtsp://{nvr_user}:***@{nvr_ip}:554/c{nvr_channel}/b{args.start}/e{args.end}/replay/"
+        replay_url = f"rtsp://{nvr_user}:{encoded_pass}@{nvr_ip}:554/c{nvr_channel}/b{args.start}/e{args.end}/replay"
+        safe_url = f"rtsp://{nvr_user}:***@{nvr_ip}:554/c{nvr_channel}/b{args.start}/e{args.end}/replay"
     elif nvr_brand == 'hikvision':
         hik_start = dt_start.strftime("%Y%m%dT%H%M%SZ")
         hik_end = dt_end.strftime("%Y%m%dT%H%M%SZ")
