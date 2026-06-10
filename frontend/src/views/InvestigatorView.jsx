@@ -264,8 +264,8 @@ const InvestigatorView = () => {
     // NVR Search State
     const [cameras, setCameras] = useState([]);
     const [nvrForm, setNvrForm] = useState({ camera_id: '', start_time: '', end_time: '' });
-    const [nvrSessionId, setNvrSessionId] = useState(null);
-    const [nvrStatus, setNvrStatus] = useState(null);
+    const [nvrSessionId, setNvrSessionId] = useState(() => localStorage.getItem('nvrSessionId'));
+    const [nvrStatus, setNvrStatus] = useState(() => localStorage.getItem('nvrSessionId') ? 'IN_PROGRESS' : null);
     const [nvrError, setNvrError] = useState(null);
 
     useEffect(() => {
@@ -286,6 +286,12 @@ const InvestigatorView = () => {
                     setNvrStatus(data.status);
                     if (data.status === 'COMPLETED') {
                         clearInterval(interval);
+                    } else if (data.status.startsWith('FAILED')) {
+                        clearInterval(interval);
+                        setNvrError("Extraction failed: " + data.status);
+                        setNvrStatus(null);
+                        setNvrSessionId(null);
+                        localStorage.removeItem('nvrSessionId');
                     }
                 } catch (e) {
                     console.error("Status check failed", e);
@@ -302,6 +308,7 @@ const InvestigatorView = () => {
         }
         setNvrError(null);
         setNvrSessionId(null);
+        localStorage.removeItem('nvrSessionId');
         setNvrStatus('STARTING...');
 
         const start_ts = Math.floor(new Date(nvrForm.start_time).getTime() / 1000);
@@ -315,6 +322,7 @@ const InvestigatorView = () => {
             });
             const data = res.data;
             setNvrSessionId(data.session_id);
+            localStorage.setItem('nvrSessionId', data.session_id);
             setNvrStatus('IN_PROGRESS');
         } catch (err) {
             setNvrError(err.message);
@@ -548,6 +556,7 @@ const InvestigatorView = () => {
                                     onClick={() => { 
                                         setNvrStatus(null); 
                                         setNvrSessionId(null); 
+                                        localStorage.removeItem('nvrSessionId');
                                         setActiveTab('IMG_SEARCH'); 
                                         const start_ts = Math.floor(new Date(nvrForm.start_time).getTime() / 1000);
                                         const end_ts = Math.floor(new Date(nvrForm.end_time).getTime() / 1000);
@@ -559,7 +568,7 @@ const InvestigatorView = () => {
                                 </button>
                             ) : (
                                 <button 
-                                    onClick={() => { setNvrStatus(null); setNvrSessionId(null); setActiveTab('ID_SEARCH'); }}
+                                    onClick={() => { setNvrStatus(null); setNvrSessionId(null); localStorage.removeItem('nvrSessionId'); setActiveTab('ID_SEARCH'); }}
                                     className="bg-emerald-600 text-white font-bold px-6 py-2.5 rounded-lg shadow-md hover:bg-emerald-700 transition-colors text-sm"
                                 >
                                     Jump to Dossier Search
