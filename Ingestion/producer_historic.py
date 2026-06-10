@@ -41,7 +41,7 @@ def get_nvr_config(camera_id):
             port=settings.postgres_port
         )
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute("SELECT nvr_brand, nvr_ip, nvr_user, nvr_pass, nvr_channel FROM cameras WHERE camera_id = %s", (camera_id,))
+        cursor.execute("SELECT nvr_brand, nvr_ip, nvr_user, nvr_pass, nvr_channel, rtsp_url FROM cameras WHERE camera_id = %s", (camera_id,))
         cam = cursor.fetchone()
         cursor.close()
         conn.close()
@@ -81,7 +81,7 @@ def main():
     nvr_channel = cam.get('nvr_channel')
     if not nvr_channel:
         import re
-        nvr_url = cam.get('url') or ""
+        nvr_url = cam.get('rtsp_url') or ""
         match = re.search(r'/c(\d+)/', nvr_url)
         nvr_channel = match.group(1) if match else 1
 
@@ -97,7 +97,7 @@ def main():
     dt_end = datetime.fromtimestamp(args.end, tz=deployment_tz)
 
     if nvr_brand == 'uniview':
-        replay_url = f"rtsp://{nvr_user}:{encoded_pass}@{nvr_ip}:554/c{nvr_channel}/b{args.start}/e{args.end}/replay"
+        replay_url = f"rtsp://{nvr_user}:{encoded_pass}@{nvr_ip}:554/c{nvr_channel}/b{args.start}/e{args.end}/replay/"
     elif nvr_brand == 'hikvision':
         hik_start = dt_start.strftime("%Y%m%dT%H%M%SZ")
         hik_end = dt_end.strftime("%Y%m%dT%H%M%SZ")
