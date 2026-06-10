@@ -25,9 +25,9 @@ class Settings(BaseSettings):
     smtp_sender_email: str = ""
     smtp_app_password: str = ""
 
-    # Look for .env file in the parent directory
+    # Look for .env file in the parent directory (root of the repo)
     model_config = SettingsConfigDict(
-        env_file=os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'), 
+        env_file=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'), 
         env_file_encoding="utf-8",
         extra="ignore"
     )
