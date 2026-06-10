@@ -1,9 +1,14 @@
+import os
+
+# 🚨 OPENCV FFMPEG OPTIONS MUST BE SET BEFORE IMPORTING CV2 🚨
+# Force TCP for RTSP to prevent UDP packet loss, and set a 5-second connection timeout
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;5000000|timeout;5000000"
+
 import cv2
 import time
 import redis
 import json
 import base64
-import os
 import argparse
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -19,8 +24,7 @@ logger.add("logs/producer_historic.log", rotation="10 MB")
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend_api'))
 from config import settings
 
-# Force TCP for RTSP to prevent UDP packet loss, and set a 5-second connection timeout
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;5000000"
+
 
 # Connect to local Redis
 r = redis.Redis(host=settings.redis_host, port=settings.redis_port, db=0)
