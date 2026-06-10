@@ -13,6 +13,7 @@ import asyncio
 import json
 import psycopg2
 import shutil
+import subprocess
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
 from pymilvus import MilvusClient, connections, utility
@@ -39,10 +40,27 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 # ==========================================
 # 1. SYSTEM SETUP
 # ==========================================
+# Global dictionary to track orphaned subprocesses
+active_nvr_processes = {}
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     startup_db_check()
     yield
+    # Cleanup on server shutdown (Ctrl+C)
+    logger.info("FastAPI shutting down. Terminating active NVR extractions...")
+    for session_id, proc in active_nvr_processes.items():
+        try:
+            logger.info(f"Terminating orphaned NVR extraction process for session {session_id}")
+            proc.terminate()
+            conn = get_pg_connection()
+            cur = conn.cursor()
+            cur.execute("UPDATE historical_jobs SET status = 'FAILED_CRASH' WHERE session_id = %s", (session_id,))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Failed to terminate process {session_id}: {e}")
 
 app = FastAPI(title="C.O.R.E. Surveillance API", version="3.1", lifespan=lifespan)
 
@@ -614,13 +632,21 @@ class NVRSearchRequest(BaseModel):
 def run_nvr_historic_extraction(camera_id: str, start_time: int, end_time: int, session_id: str):
     script_path = os.path.join("..", "Ingestion", "producer_historic.py")
     try:
-        subprocess.run([
+        proc = subprocess.Popen([
             "python", script_path,
             "--camera_id", camera_id,
             "--start", str(start_time),
             "--end", str(end_time),
             "--session", session_id
-        ], timeout=3600, check=True)
+        ])
+        active_nvr_processes[session_id] = proc
+        
+        return_code = proc.wait(timeout=3600)
+        active_nvr_processes.pop(session_id, None)
+        
+        if return_code != 0:
+            raise subprocess.CalledProcessError(return_code, proc.args)
+            
     except subprocess.TimeoutExpired:
         print(f"[FATAL] Session {session_id} timed out. Releasing thread.")
         try:
