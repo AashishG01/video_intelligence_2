@@ -1,8 +1,9 @@
 import os
 
 # 🚨 OPENCV FFMPEG OPTIONS MUST BE SET BEFORE IMPORTING CV2 🚨
-# Force TCP for RTSP to prevent UDP packet loss, and set a 5-second connection timeout
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;5000000|timeout;5000000"
+# Force TCP for RTSP to prevent UDP packet loss, and set a 15-second connection timeout
+# (Historical NVR seeks on spinning drives can legitimately take 10+ seconds)
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;15000000|timeout;15000000"
 
 import cv2
 import time
@@ -75,7 +76,14 @@ def main():
     encoded_pass = urllib.parse.quote(raw_pass)
     nvr_ip = cam.get('nvr_ip')
     nvr_user = cam.get('nvr_user')
-    nvr_channel = cam.get('nvr_channel') or 1
+    
+    # Intelligently extract the channel
+    nvr_channel = cam.get('nvr_channel')
+    if not nvr_channel:
+        import re
+        nvr_url = cam.get('url') or ""
+        match = re.search(r'/c(\d+)/', nvr_url)
+        nvr_channel = match.group(1) if match else 1
 
     # Establish the physical deployment timezone to prevent Docker UTC overrides
     try:
