@@ -5,7 +5,19 @@ import 'leaflet/dist/leaflet.css';
 import api from '../api';
 import { BACKEND_URL } from '../config';
 import { X, Video } from 'lucide-react';
+import WebRTCPlayer from '../components/WebRTCPlayer';
+import { useMap } from 'react-leaflet';
 
+const MapResizer = () => {
+    const map = useMap();
+    useEffect(() => {
+        // Delay to allow DOM layout to finish before invalidating
+        setTimeout(() => {
+            map.invalidateSize();
+        }, 100);
+    }, [map]);
+    return null;
+};
 // Fix for default Leaflet markers in React
 import icon from 'leaflet/dist/images/marker-icon.png';
 import iconShadow from 'leaflet/dist/images/marker-shadow.png';
@@ -65,8 +77,9 @@ export default function MapView() {
             </div>
 
             <div className="flex-1 p-6 relative">
-                <div className="w-full h-full rounded-2xl overflow-hidden shadow-sm border border-slate-200">
+                <div className="w-full h-full min-h-[400px] rounded-2xl overflow-hidden shadow-sm border border-slate-200">
                     <MapContainer center={SURAT_CENTER} zoom={13} style={{ height: '100%', width: '100%' }}>
+                        <MapResizer />
                         <TileLayer
                             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -124,18 +137,7 @@ export default function MapView() {
                             </button>
                         </div>
                         <div className="relative aspect-video bg-black flex items-center justify-center">
-                            <img 
-                                src={`${BACKEND_URL}/api/stream/${selectedCam.camera_id}`}
-                                alt={`Live feed from ${selectedCam.camera_name}`}
-                                className="w-full h-full object-contain"
-                                onError={(e) => {
-                                    e.target.style.display = 'none';
-                                    e.target.nextSibling.style.display = 'block';
-                                }}
-                            />
-                            <div className="hidden absolute text-slate-500 font-medium">
-                                Video Feed Unavailable
-                            </div>
+                            <WebRTCPlayer camId={selectedCam.camera_id} />
                         </div>
                     </div>
                 </div>

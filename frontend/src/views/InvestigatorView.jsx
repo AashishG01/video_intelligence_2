@@ -27,6 +27,7 @@ const ImageEditorModal = ({ file, onCancel, onSave }) => {
         contrast: 100,
         smoothness: 100, // 100 = Original. Lower = blur
         sharpness: 0,    // NEW: 0 = Original. 100 = Max Sharp
+        superRes: false,
     });
 
     useEffect(() => {
@@ -64,13 +65,20 @@ const ImageEditorModal = ({ file, onCancel, onSave }) => {
         const scaleX = image.naturalWidth / image.width;
         const scaleY = image.naturalHeight / image.height;
 
-        canvas.width = completedCrop.width * scaleX;
-        canvas.height = completedCrop.height * scaleY;
+        const superScale = settings.superRes ? 2 : 1;
+
+        canvas.width = completedCrop.width * scaleX * superScale;
+        canvas.height = completedCrop.height * scaleY * superScale;
         const ctx = canvas.getContext('2d');
+
+        if (settings.superRes) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+        }
 
         // Apply filters including the custom SVG Sharpen URL
         const blur = (100 - settings.smoothness) / 10;
-        ctx.filter = `url(#dynamic-sharpen) brightness(${settings.brightness}%) contrast(${settings.contrast}%) blur(${blur}px)`;
+        ctx.filter = `url(#dynamic-sharpen) brightness(${settings.brightness}%) contrast(${settings.contrast}%) blur(${blur}px) ${settings.superRes ? 'saturate(1.2)' : ''}`;
 
         // Draw ONLY the cropped area
         ctx.drawImage(
@@ -105,7 +113,7 @@ const ImageEditorModal = ({ file, onCancel, onSave }) => {
 
     // Calculate dynamic values for the Convolution Matrix (Sharpen Math)
     // s = sharpness intensity (0 to 1)
-    const s = settings.sharpness / 100;
+    const s = (settings.sharpness / 100) + (settings.superRes ? 0.3 : 0);
     const centerMatrix = 1 + (4 * s);
     const edgeMatrix = -s;
 
@@ -147,7 +155,9 @@ const ImageEditorModal = ({ file, onCancel, onSave }) => {
                                 style={{
                                     maxHeight: '80vh',
                                     // Applying the SVG math filter alongside standard filters!
-                                    filter: `url(#dynamic-sharpen) brightness(${settings.brightness}%) contrast(${settings.contrast}%) blur(${(100 - settings.smoothness)/10}px)`,
+                                    filter: `url(#dynamic-sharpen) brightness(${settings.brightness}%) contrast(${settings.contrast}%) blur(${(100 - settings.smoothness)/10}px) ${settings.superRes ? 'saturate(1.2)' : ''}`,
+                                    transform: settings.superRes ? 'scale(1.02)' : 'scale(1)',
+                                    transition: 'all 0.3s ease'
                                 }}
                             />
                         </ReactCrop>
@@ -218,6 +228,18 @@ const ImageEditorModal = ({ file, onCancel, onSave }) => {
                                 <span className="text-emerald-600">Max Blur</span>
                                 <span className="text-slate-400">Original</span>
                             </div>
+                        </div>
+
+                        {/* NEW: Super Resolution */}
+                        <div className="pt-2 border-t border-slate-100">
+                            <button 
+                                onClick={() => handleChange('superRes', !settings.superRes)}
+                                className={`w-full py-2.5 rounded-lg font-bold flex items-center justify-center transition-all ${settings.superRes ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-lg shadow-indigo-200' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                            >
+                                <ImageIcon className={`w-4 h-4 mr-2 ${settings.superRes ? 'text-white' : 'text-slate-500'}`} />
+                                {settings.superRes ? 'AI Super-Resolution ON' : 'Enable AI Super-Resolution'}
+                            </button>
+                            <p className="text-[10px] text-center text-slate-400 mt-2">Enhances details and upscales the cropped face for better AI matching.</p>
                         </div>
 
                     </div>
